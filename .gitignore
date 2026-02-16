@@ -39,3 +39,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# browser session (Ulta agent persistent login)
+.browser-session/
+server/.browser-session/
+checkout-debug.png
+checkout-error.png

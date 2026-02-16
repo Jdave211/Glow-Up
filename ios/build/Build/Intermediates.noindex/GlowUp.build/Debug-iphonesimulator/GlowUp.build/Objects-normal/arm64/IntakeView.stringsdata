@@ -1,0 +1,272 @@
+{
+  "source": "/Users/davejaga/Desktop/Startups/looksmaxxing/ios/GlowUp/IntakeView.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "%lld/%lld",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 57
+        }
+      },
+      {
+        "comment": "",
+        "key": "Generate My Routine",
+        "location": {
+          "startingColumn": 70,
+          "startingLine": 121
+        }
+      },
+      {
+        "comment": "",
+        "key": "Continue",
+        "location": {
+          "startingColumn": 94,
+          "startingLine": 121
+        }
+      },
+      {
+        "comment": "",
+        "key": "Add Your Photos",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 166
+        }
+      },
+      {
+        "comment": "",
+        "key": "Recommended for **85% more accurate** results",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 171
+        }
+      },
+      {
+        "comment": "",
+        "key": "📸",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 162
+        }
+      },
+      {
+        "comment": "",
+        "key": "Take Photos",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 224
+        }
+      },
+      {
+        "comment": "",
+        "key": "Choose from Library",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 243
+        }
+      },
+      {
+        "comment": "",
+        "key": "Skip for now →",
+        "location": {
+          "startingColumn": 51,
+          "startingLine": 270
+        }
+      },
+      {
+        "comment": "",
+        "key": "Continue with %lld photo%@ →",
+        "location": {
+          "startingColumn": 72,
+          "startingLine": 270
+        }
+      },
+      {
+        "comment": "",
+        "key": "Private & secure — never stored or shared",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 282
+        }
+      },
+      {
+        "comment": "",
+        "key": "Camera access required",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 383
+        }
+      },
+      {
+        "comment": "",
+        "key": "Enable camera in Settings to take photos",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 387
+        }
+      },
+      {
+        "comment": "",
+        "key": "Close",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 393
+        }
+      },
+      {
+        "comment": "",
+        "key": "How would you describe your skin?",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 418
+        }
+      },
+      {
+        "comment": "",
+        "key": "Helps us recommend products suited for your melanin level",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 447
+        }
+      },
+      {
+        "comment": "",
+        "key": "Your skin tone",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 436
+        }
+      },
+      {
+        "comment": "",
+        "key": "Do you use sunscreen?",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 454
+        }
+      },
+      {
+        "comment": "",
+        "key": "Daily SPF 30+ is the most effective anti-aging product for all skin tones.",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 487
+        }
+      },
+      {
+        "comment": "",
+        "key": "Fair",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 552
+        }
+      },
+      {
+        "comment": "",
+        "key": "Deep",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 556
+        }
+      },
+      {
+        "comment": "",
+        "key": "I'm working towards...",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 588
+        }
+      },
+      {
+        "comment": "",
+        "key": "Selected: %lld/2",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 610
+        }
+      },
+      {
+        "comment": "",
+        "key": "Any specific concerns?",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 618
+        }
+      },
+      {
+        "comment": "",
+        "key": "Hair Texture",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 705
+        }
+      },
+      {
+        "comment": "",
+        "key": "How often do you wash?",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 723
+        }
+      },
+      {
+        "comment": "",
+        "key": "Every hair type has different needs—there's no wrong answer.",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 726
+        }
+      },
+      {
+        "comment": "",
+        "key": "Select all that apply",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 803
+        }
+      },
+      {
+        "comment": "",
+        "key": "Monthly beauty budget",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 858
+        }
+      },
+      {
+        "comment": "",
+        "key": "Stay consistent",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 881
+        }
+      },
+      {
+        "comment": "",
+        "key": "We'll use your check-ins to refine product suggestions—recommending what works, replacing what doesn't.",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 909
+        }
+      },
+      {
+        "comment": "",
+        "key": "",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 978
+        }
+      },
+      {
+        "comment": "",
+        "key": "",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 1091
+        }
+      }
+    ]
+  },
+  "version": 1
+}

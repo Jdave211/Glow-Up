@@ -1,0 +1,17 @@
+[
+  {
+    "success": false,
+    "url": "https://www.ulta.com/p/stubble-cream-pimprod2004290?sku=2545163",
+    "error": "HTTP 404"
+  },
+  {
+    "success": false,
+    "url": "https://www.ulta.com/p/purescreen-tinted-mineral-sunscreen-pimprod2037357?sku=2606101",
+    "error": "HTTP 404"
+  },
+  {
+    "success": false,
+    "url": "https://www.ulta.com/p/oasis-deep-pore-gel-cleanser-pimprod2037354?sku=2606114",
+    "error": "HTTP 404"
+  }
+]

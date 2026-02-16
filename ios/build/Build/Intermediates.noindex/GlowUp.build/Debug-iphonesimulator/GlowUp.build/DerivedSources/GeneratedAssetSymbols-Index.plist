@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>colors</key>
+	<array>
+		<dict>
+			<key>catalogPath</key>
+			<string>/Users/davejaga/Desktop/Startups/looksmaxxing/ios/GlowUp/Assets.xcassets</string>
+			<key>objcSymbol</key>
+			<string>ACColorNameAccentColor</string>
+			<key>relativePath</key>
+			<string>./AccentColor.colorset</string>
+			<key>swiftSymbol</key>
+			<string>accent</string>
+		</dict>
+	</array>
+	<key>images</key>
+	<array>
+		<dict>
+			<key>catalogPath</key>
+			<string>/Users/davejaga/Desktop/Startups/looksmaxxing/ios/GlowUp/Assets.xcassets</string>
+			<key>objcSymbol</key>
+			<string>ACImageNameWelcomebg1</string>
+			<key>relativePath</key>
+			<string>./welcomebg1.imageset</string>
+			<key>swiftSymbol</key>
+			<string>welcomebg1</string>
+		</dict>
+		<dict>
+			<key>catalogPath</key>
+			<string>/Users/davejaga/Desktop/Startups/looksmaxxing/ios/GlowUp/Assets.xcassets</string>
+			<key>objcSymbol</key>
+			<string>ACImageNameWelcomebg2</string>
+			<key>relativePath</key>
+			<string>./welcomebg2.imageset</string>
+			<key>swiftSymbol</key>
+			<string>welcomebg2</string>
+		</dict>
+		<dict>
+			<key>catalogPath</key>
+			<string>/Users/davejaga/Desktop/Startups/looksmaxxing/ios/GlowUp/Assets.xcassets</string>
+			<key>objcSymbol</key>
+			<string>ACImageNameWelcomebg3</string>
+			<key>relativePath</key>
+			<string>./welcomebg3.imageset</string>
+			<key>swiftSymbol</key>
+			<string>welcomebg3</string>
+		</dict>
+	</array>
+	<key>symbols</key>
+	<array/>
+</dict>
+</plist>

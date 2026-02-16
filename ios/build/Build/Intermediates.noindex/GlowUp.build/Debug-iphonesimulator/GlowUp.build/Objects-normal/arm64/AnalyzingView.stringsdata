@@ -1,0 +1,32 @@
+{
+  "source": "/Users/davejaga/Desktop/Startups/looksmaxxing/ios/GlowUp/AnalyzingView.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "✨",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 82
+        }
+      },
+      {
+        "comment": "",
+        "key": "Creating Your Routine",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 89
+        }
+      },
+      {
+        "comment": "",
+        "key": "Our AI is analyzing your unique profile...",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 94
+        }
+      }
+    ]
+  },
+  "version": 1
+}

@@ -89,6 +89,12 @@ struct SkinView: View {
     @State private var showRoutineDetail = false
     @State private var selectedRoutineType: String = "morning"
     @State private var showPaywall = false
+    @State private var routineEditorType: HomeView.RoutineType?
+    @State private var routineStreaks: (morning: Int, evening: Int) = (0, 0)
+    @State private var shareItems: [Any] = []
+    @State private var showShareSheet = false
+    @State private var isPreparingShare = false
+    @State private var shareError: String?
     
     enum SkinTab: String, CaseIterable {
         case routine = "My Routine"
@@ -140,6 +146,27 @@ struct SkinView: View {
         .sheet(isPresented: $showPaywall) {
             PremiumPaywallView()
         }
+        .sheet(item: $routineEditorType) { routineType in
+            RoutineDetailSheet(
+                routineType: routineType,
+                steps: feedRoutineSteps(for: routineType),
+                morningSteps: feedRoutineSteps(for: .morning),
+                eveningSteps: feedRoutineSteps(for: .evening),
+                weeklySteps: [],
+                completedSteps: Binding(
+                    get: { viewModel.completedSteps },
+                    set: { viewModel.completedSteps = $0 }
+                ),
+                streaks: $routineStreaks,
+                userId: SessionManager.shared.userId ?? "",
+                onRoutineUpdated: {
+                    viewModel.load(userId: SessionManager.shared.userId, forceRefresh: true)
+                }
+            )
+        }
+        .sheet(isPresented: $showShareSheet) {
+            ActivityShareSheet(items: shareItems)
+        }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GlowUpNotificationDestination"))) { note in
             guard let destination = note.userInfo?["destination"] as? String else { return }
             if destination == "routine" {
@@ -147,6 +174,12 @@ struct SkinView: View {
             } else if destination == "progress" {
                 selectedTab = .progress
             }
+        }
+        .onChange(of: viewModel.page?.streaks.morning ?? 0) { _, newVal in
+            routineStreaks.morning = newVal
+        }
+        .onChange(of: viewModel.page?.streaks.evening ?? 0) { _, newVal in
+            routineStreaks.evening = newVal
         }
     }
     
@@ -361,6 +394,42 @@ struct SkinView: View {
     // MARK: - Routine Content
     private var routineContent: some View {
         VStack(spacing: 16) {
+            if !viewModel.morningSteps.isEmpty || !viewModel.eveningSteps.isEmpty {
+                HStack {
+                    Text("Routine Actions")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(Color(hex: "777777"))
+                    
+                    Spacer()
+                    
+                    Button(action: { prepareRoutineShare(routineType: nil, fallbackTitle: "My Routine", fallbackSteps: viewModel.morningSteps + viewModel.eveningSteps) }) {
+                        Label("Share", systemImage: "square.and.arrow.up")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(isPreparingShare ? Color(hex: "AAAAAA") : Color(hex: "666666"))
+                    }
+                    .disabled(isPreparingShare)
+                    
+                    Menu {
+                        if !viewModel.morningSteps.isEmpty {
+                            Button("Edit Morning") { routineEditorType = .morning }
+                        }
+                        if !viewModel.eveningSteps.isEmpty {
+                            Button("Edit Evening") { routineEditorType = .evening }
+                        }
+                    } label: {
+                        Label("Edit", systemImage: "pencil")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(Color(hex: "FF6B9D"))
+                    }
+                }
+
+                if let shareError {
+                    Text(shareError)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(Color(hex: "D64545"))
+                }
+            }
+
             // Agent Assessment
             if let assessment = viewModel.agent?.skin_assessment, !assessment.isEmpty {
                 HStack(spacing: 12) {
@@ -442,6 +511,27 @@ struct SkinView: View {
                 Text("\(doneCount)/\(steps.count)")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundColor(doneCount == steps.count ? Color(hex: "4ECDC4") : Color(hex: "999999"))
+
+                Button(action: { prepareRoutineShare(routineType: routineType, fallbackTitle: title, fallbackSteps: steps) }) {
+                    Image(systemName: "square.and.arrow.up")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(isPreparingShare ? Color(hex: "B5B5B5") : Color(hex: "777777"))
+                        .padding(6)
+                        .background(Color(hex: "F6F6F6"))
+                        .clipShape(Circle())
+                }
+                .disabled(isPreparingShare)
+
+                Button(action: {
+                    routineEditorType = routineType == "morning" ? .morning : .evening
+                }) {
+                    Image(systemName: "pencil")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(Color(hex: "FF6B9D"))
+                        .padding(6)
+                        .background(Color(hex: "FFE8F0"))
+                        .clipShape(Circle())
+                }
             }
             
             // Steps
@@ -780,6 +870,84 @@ struct SkinView: View {
         default: return freq.replacingOccurrences(of: "_", with: " ").capitalized
         }
     }
+
+    private func feedRoutineSteps(for type: HomeView.RoutineType) -> [FeedRoutineStep] {
+        let source: [SkinPageRoutineStep]
+        switch type {
+        case .morning:
+            source = viewModel.morningSteps
+        case .evening:
+            source = viewModel.eveningSteps
+        case .weekly:
+            source = []
+        }
+
+        return source.map { step in
+            FeedRoutineStep(
+                step: step.step,
+                name: step.name,
+                tip: step.instructions,
+                product_id: step.product_id,
+                product_name: step.product_name,
+                product_brand: step.product_brand,
+                product_price: step.product_price,
+                product_image: step.product_image,
+                buy_link: nil
+            )
+        }
+    }
+
+    private func shareText(title: String, steps: [SkinPageRoutineStep]) -> String {
+        let lines = steps.sorted { $0.step < $1.step }.map { step -> String in
+            var line = "\(step.step). \(step.name)"
+            if let productName = step.product_name, !productName.isEmpty {
+                line += " - \(productName)"
+            }
+            if let brand = step.product_brand, !brand.isEmpty {
+                line += " (\(brand))"
+            }
+            if let productId = step.product_id, !productId.isEmpty {
+                line += "\n   Product ID: \(productId)"
+            }
+            if let instructions = step.instructions, !instructions.isEmpty {
+                line += "\n   \(instructions)"
+            }
+            return line
+        }
+        return "\(title)\n\n" + lines.joined(separator: "\n\n")
+    }
+
+    private var fullRoutineShareText: String {
+        let morning = shareText(title: "Morning Glow", steps: viewModel.morningSteps)
+        let evening = shareText(title: "Evening Repair", steps: viewModel.eveningSteps)
+        return "\(morning)\n\n\(evening)"
+    }
+
+    private func prepareRoutineShare(routineType: String?, fallbackTitle: String, fallbackSteps: [SkinPageRoutineStep]) {
+        guard let userId = SessionManager.shared.userId else { return }
+        isPreparingShare = true
+        shareError = nil
+
+        Task {
+            do {
+                let response = try await APIService.shared.createRoutineShareLink(userId: userId, routineType: routineType)
+                let fallbackText = shareText(title: fallbackTitle, steps: fallbackSteps)
+                let shareUrl = URL(string: response.share_url)
+                await MainActor.run {
+                    var items: [Any] = [fallbackText]
+                    if let shareUrl { items.insert(shareUrl, at: 0) }
+                    shareItems = items
+                    isPreparingShare = false
+                    showShareSheet = true
+                }
+            } catch {
+                await MainActor.run {
+                    isPreparingShare = false
+                    shareError = "Couldn't prepare share link right now."
+                }
+            }
+        }
+    }
 }
 
 // MARK: - Routine Step Row
@@ -845,6 +1013,14 @@ struct SkinRoutineStepRow: View {
                                 .font(.system(size: 11, weight: .semibold))
                                 .foregroundColor(Color(hex: "999999"))
                         }
+                    }
+
+                    if let productId = step.product_id, !productId.isEmpty {
+                        Text("ID \(productId)")
+                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                            .foregroundColor(Color(hex: "A0A0A0"))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
                     }
                 }
                 

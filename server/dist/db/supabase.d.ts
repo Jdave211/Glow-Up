@@ -5,8 +5,6 @@ export interface DbUser {
     email: string;
     name: string;
     onboarded: boolean;
-    is_premium?: boolean;
-    stripe_customer_id?: string;
     created_at: string;
 }
 export interface DbProfile {
@@ -124,7 +122,6 @@ export declare class DatabaseService {
     static getOrCreateUser(email: string, name: string): Promise<DbUser | null>;
     static getUserById(userId: string): Promise<DbUser | null>;
     static markUserOnboarded(userId: string): Promise<boolean>;
-    static markUserPremium(userId: string, isPremium: boolean, stripeCustomerId?: string): Promise<boolean>;
     static isUserOnboarded(userId: string): Promise<boolean>;
     static saveProfile(userId: string, profile: {
         skinType: string;

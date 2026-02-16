@@ -24,6 +24,7 @@
 		A100000F /* CartView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000F /* CartView.swift */; };
 		A1000010 /* SkinView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000010 /* SkinView.swift */; };
 		A1000011 /* PaymentHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000011 /* PaymentHandler.swift */; };
+		A1000012 /* SubscriptionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000012 /* SubscriptionManager.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -45,6 +46,7 @@
 		A200000F /* CartView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CartView.swift; sourceTree = "<group>"; };
 		A2000010 /* SkinView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkinView.swift; sourceTree = "<group>"; };
 		A2000011 /* PaymentHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaymentHandler.swift; sourceTree = "<group>"; };
+		A2000012 /* SubscriptionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubscriptionManager.swift; sourceTree = "<group>"; };
 		A3000001 /* GlowUp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = GlowUp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -83,6 +85,7 @@
 				A2000010 /* SkinView.swift */,
 				447E94372F3E977B00908C30 /* PremiumPaywallView.swift */,
 				A2000011 /* PaymentHandler.swift */,
+				A2000012 /* SubscriptionManager.swift */,
 				A2000007 /* APIService.swift */,
 				A2000008 /* Models.swift */,
 				A200000A /* SupabaseService.swift */,
@@ -181,6 +184,7 @@
 				A100000F /* CartView.swift in Sources */,
 				A1000010 /* SkinView.swift in Sources */,
 				A1000011 /* PaymentHandler.swift in Sources */,
+				A1000012 /* SubscriptionManager.swift in Sources */,
 				A1000007 /* APIService.swift in Sources */,
 				A1000008 /* Models.swift in Sources */,
 				A100000A /* SupabaseService.swift in Sources */,
@@ -323,6 +327,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSCameraUsageDescription = "GlowUp uses the camera to capture progress photos for your skincare journey.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "GlowUp uses your photo library so you can select onboarding and progress photos.";
+					INFOPLIST_KEY_PREMIUM_MONTHLY_PRODUCT_ID = com.glowup.premium;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -355,6 +360,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSCameraUsageDescription = "GlowUp uses the camera to capture progress photos for your skincare journey.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "GlowUp uses your photo library so you can select onboarding and progress photos.";
+					INFOPLIST_KEY_PREMIUM_MONTHLY_PRODUCT_ID = com.glowup.premium;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;

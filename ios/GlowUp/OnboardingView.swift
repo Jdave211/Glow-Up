@@ -75,23 +75,6 @@ struct OnboardingView: View {
                 .padding(.horizontal, 24)
                 .padding(.bottom, 24)
 
-                // Premium preview before post-onboarding mini paywall
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("GlowUp+ Preview")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundColor(Color(hex: "FFD4E5"))
-                    HStack(spacing: 10) {
-                        Label("Faster AI insights", systemImage: "sparkles")
-                        Label("Price scouting", systemImage: "tag.fill")
-                        Label("Free shipping", systemImage: "shippingbox.fill")
-                    }
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(.white.opacity(0.9))
-                    .lineLimit(1)
-                }
-                .padding(.horizontal, 24)
-                .padding(.bottom, 20)
-                
                 // Buttons Section
                 VStack(spacing: 16) {
                     // Sign In With Apple (Primary) - Official Apple Style

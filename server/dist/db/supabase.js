@@ -3,9 +3,15 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.DatabaseService = exports.supabase = void 0;
 const supabase_js_1 = require("@supabase/supabase-js");
 // Supabase Configuration
-const supabaseUrl = 'https://ukhxwxmqjltfjugizbku.supabase.co';
-const supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVraHh3eG1xamx0Zmp1Z2l6Ymt1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njk1NDA2NTUsImV4cCI6MjA4NTExNjY1NX0.x8sfd80Hmb6_wLtBG0Up9OqQZ49wjrhTE_wfdkVnPk4';
-exports.supabase = (0, supabase_js_1.createClient)(supabaseUrl, supabaseAnonKey);
+const supabaseUrl = process.env.SUPABASE_URL || 'https://ukhxwxmqjltfjugizbku.supabase.co';
+const supabaseAnonKey = process.env.SUPABASE_ANON_KEY ||
+    'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVraHh3eG1xamx0Zmp1Z2l6Ymt1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njk1NDA2NTUsImV4cCI6MjA4NTExNjY1NX0.x8sfd80Hmb6_wLtBG0Up9OqQZ49wjrhTE_wfdkVnPk4';
+const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const supabaseKey = supabaseServiceRoleKey || supabaseAnonKey;
+if (!supabaseServiceRoleKey) {
+    console.warn('⚠️ SUPABASE_SERVICE_ROLE_KEY not set; using anon key fallback for server operations.');
+}
+exports.supabase = (0, supabase_js_1.createClient)(supabaseUrl, supabaseKey);
 // Database service functions
 class DatabaseService {
     // ═══════════════════════════════════════════════════════════════
@@ -66,21 +72,6 @@ class DatabaseService {
         console.log('✅ User onboarded update result:', data);
         return true;
     }
-    static async markUserPremium(userId, isPremium, stripeCustomerId) {
-        const updates = { is_premium: isPremium };
-        if (stripeCustomerId) {
-            updates.stripe_customer_id = stripeCustomerId;
-        }
-        const { error } = await exports.supabase
-            .from('users')
-            .update(updates)
-            .eq('id', userId);
-        if (error) {
-            console.error('Error marking user premium:', error);
-            return false;
-        }
-        return true;
-    }
     static async isUserOnboarded(userId) {
         const { data, error } = await exports.supabase
             .from('users')
@@ -137,15 +128,42 @@ class DatabaseService {
     // ROUTINE OPERATIONS
     // ═══════════════════════════════════════════════════════════════
     static async saveRoutine(userId, profileId, routineData) {
-        const { data, error } = await exports.supabase
+        // Product routines are user-owned snapshots; overwrite prior routine
+        // so onboarding re-runs, chat edits, and manual edits always replace
+        // stale/generated routines with the latest canonical one.
+        const { error: deleteError } = await exports.supabase
             .from('routines')
-            .insert({
+            .delete()
+            .eq('user_id', userId);
+        if (deleteError) {
+            console.error('Error clearing previous routine:', deleteError);
+            return null;
+        }
+        const insertPayload = {
             user_id: userId,
             profile_id: profileId,
             routine_data: routineData
-        })
+        };
+        let { data, error } = await exports.supabase
+            .from('routines')
+            .insert(insertPayload)
             .select()
             .single();
+        // Backward-compat safety: some environments still have routines.profile_id
+        // pointing at the legacy profiles table. Retry with null profile_id so
+        // routine persistence still works until migration is applied.
+        if (error && String(error.message || '').includes('routines_profile_id_fkey')) {
+            console.warn('⚠️ routines.profile_id FK mismatch detected. Retrying save with null profile_id.');
+            ({ data, error } = await exports.supabase
+                .from('routines')
+                .insert({
+                user_id: userId,
+                profile_id: null,
+                routine_data: routineData
+            })
+                .select()
+                .single());
+        }
         if (error) {
             console.error('Error saving routine:', error);
             return null;

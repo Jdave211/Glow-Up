@@ -88,6 +88,31 @@ class APIService {
         
         return ChatResponse(message: message, title: title, products: decodedProducts, productMap: productMap)
     }
+
+    func guestChat(messages: [[String: String]]) async throws -> String {
+        guard let url = URL(string: "\(baseURL)/api/chat/guest") else {
+            throw APIError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 45
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["messages": messages])
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            throw APIError.serverError
+        }
+
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let message = json["message"] as? String else {
+            throw APIError.decodingError
+        }
+
+        return message
+    }
     
     // MARK: - Skin Page
     
@@ -330,6 +355,116 @@ class APIService {
             #endif
             return
         }
+    }
+
+    struct RoutineUpdateStep: Codable {
+        let step: Int
+        let name: String
+        let instructions: String
+        let frequency: String
+        let product_id: String?
+        let product_name: String?
+    }
+
+    private struct RoutineUpdateRequest: Codable {
+        let userId: String
+        let routine: RoutinePayload
+        let summary: String?
+
+        struct RoutinePayload: Codable {
+            let morning: [RoutineUpdateStep]
+            let evening: [RoutineUpdateStep]
+            let weekly: [RoutineUpdateStep]
+        }
+    }
+
+    private struct RoutineSearchResponse: Codable {
+        let success: Bool
+        let products: [FeedProduct]
+    }
+
+    struct RoutineShareResponse: Codable {
+        let success: Bool
+        let share_url: String
+        let app_deep_link: String?
+        let routine_type: String?
+    }
+
+    func searchRoutineProducts(
+        userId: String?,
+        query: String,
+        category: String? = nil,
+        limit: Int = 8
+    ) async throws -> [FeedProduct] {
+        guard let url = URL(string: "\(baseURL)/api/routine/search-products") else { throw APIError.invalidURL }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 20
+
+        var body: [String: Any] = [
+            "query": query,
+            "limit": max(1, min(limit, 20))
+        ]
+        if let userId { body["userId"] = userId }
+        if let category, !category.isEmpty { body["category"] = category }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            throw APIError.serverError
+        }
+
+        return try JSONDecoder().decode(RoutineSearchResponse.self, from: data).products
+    }
+
+    func updateRoutine(
+        userId: String,
+        morning: [RoutineUpdateStep],
+        evening: [RoutineUpdateStep],
+        weekly: [RoutineUpdateStep],
+        summary: String? = nil
+    ) async throws {
+        guard let url = URL(string: "\(baseURL)/api/routine/update") else { throw APIError.invalidURL }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 30
+
+        let payload = RoutineUpdateRequest(
+            userId: userId,
+            routine: .init(morning: morning, evening: evening, weekly: weekly),
+            summary: summary
+        )
+        request.httpBody = try JSONEncoder().encode(payload)
+
+        let (_, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            throw APIError.serverError
+        }
+    }
+
+    func createRoutineShareLink(userId: String, routineType: String? = nil) async throws -> RoutineShareResponse {
+        guard let url = URL(string: "\(baseURL)/api/routine/share") else { throw APIError.invalidURL }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 20
+
+        var body: [String: Any] = ["userId": userId]
+        if let routineType, !routineType.isEmpty {
+            body["routineType"] = routineType
+        }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            throw APIError.serverError
+        }
+
+        return try JSONDecoder().decode(RoutineShareResponse.self, from: data)
     }
     
     // MARK: - Routine Check-ins

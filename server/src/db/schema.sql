@@ -60,7 +60,7 @@ CREATE INDEX IF NOT EXISTS idx_products_category ON products(category);
 CREATE TABLE IF NOT EXISTS routines (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id UUID REFERENCES users(id) ON DELETE CASCADE,
-  profile_id UUID REFERENCES profiles(id) ON DELETE CASCADE,
+  profile_id UUID REFERENCES skin_profiles(id) ON DELETE CASCADE,
   routine_data JSONB NOT NULL,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -172,7 +172,6 @@ INSERT INTO products (name, brand, price, category, description, tags, buy_link,
 ('No. 7 Bonding Oil', 'Olaplex', 30.00, 'styling', 'Highly concentrated reparative styling oil.', ARRAY['damage', 'frizz', 'shine', 'all-hair-types'], 'https://www.sephora.com/product/no-7-bonding-oil', 'Sephora', 4.5)
 
 ON CONFLICT (name) DO NOTHING;
-
 
 
 

@@ -141,7 +141,7 @@ struct CartView: View {
                 Button(action: { showPaywall = true }) {
                     HStack(spacing: 6) {
                         Image(systemName: "lock.fill")
-                        Text("Unlock agent price finding & free shipping")
+                        Text("Unlock agent price finding & NA free shipping")
                     }
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundColor(Color(hex: "FF6B9D"))

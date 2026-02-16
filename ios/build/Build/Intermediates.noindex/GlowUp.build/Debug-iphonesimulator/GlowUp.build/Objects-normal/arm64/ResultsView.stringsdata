@@ -1,0 +1,88 @@
+{
+  "source": "/Users/davejaga/Desktop/Startups/looksmaxxing/ios/GlowUp/ResultsView.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "your glow up ✨",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 29
+        }
+      },
+      {
+        "comment": "",
+        "key": "%lld%%",
+        "location": {
+          "startingColumn": 38,
+          "startingLine": 42
+        }
+      },
+      {
+        "comment": "",
+        "key": "match",
+        "location": {
+          "startingColumn": 38,
+          "startingLine": 45
+        }
+      },
+      {
+        "comment": "",
+        "key": "recommended for you 💕",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 62
+        }
+      },
+      {
+        "comment": "",
+        "key": "agent insights 🔮",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 73
+        }
+      },
+      {
+        "comment": "",
+        "key": "shop all • $%@",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 90
+        }
+      },
+      {
+        "comment": "",
+        "key": "start over 💫",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 108
+        }
+      },
+      {
+        "comment": "",
+        "key": "$%lld",
+        "location": {
+          "startingColumn": 18,
+          "startingLine": 175
+        }
+      },
+      {
+        "comment": "",
+        "key": "%lld%%",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 151
+        }
+      },
+      {
+        "comment": "",
+        "key": "⭐ %@",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 163
+        }
+      }
+    ]
+  },
+  "version": 1
+}

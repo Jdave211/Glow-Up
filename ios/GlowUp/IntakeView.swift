@@ -8,23 +8,21 @@ struct IntakeView: View {
     
     @State private var currentStep = 0
     @State private var scrollID = UUID()
-    // Total steps: 0 (Photo), 1 (Skin 1), 2 (Skin 2), 3 (Hair - optional), 4 (Lifestyle/Reminders), 5 (Review)
-    private let totalSteps = 6
+    // Total steps: 0 (Photo), 1 (Skin 1), 2 (Skin 2), 3 (Hair - optional), 4 (Lifestyle/Reminders)
+    private let totalSteps = 5
     private let stepTitles = [
         "Add your photos",
         "Skin basics",
         "Skin goals",
         "Hair",
-        "Lifestyle & reminders",
-        "Review your profile"
+        "Lifestyle & reminders"
     ]
     private let stepSubtitles = [
         "Optional, but improves accuracy dramatically.",
         "Tell us about your skin type and tone.",
         "What do you want to improve most?",
         "Optional — helps us refine your full routine.",
-        "Set preferences that shape your routine.",
-        "Confirm details before we generate recommendations."
+        "Set preferences that shape your routine."
     ]
     
     var body: some View {
@@ -116,8 +114,6 @@ struct IntakeView: View {
                                 })
                             case 4:
                                 RemindersStep(profile: $profile)
-                            case 5:
-                                ReviewStep(profile: $profile)
                             default:
                                 EmptyView()
                             }
@@ -177,15 +173,17 @@ struct PhotoUploadStep: View {
     @Binding var profile: UserProfile
     let onContinue: () -> Void
     
-    @State private var showingImagePicker = false
+    @State private var showingSlotOptions = false
+    @State private var showingPhotoLibrary = false
     @State private var showingCamera = false
     @State private var frontImage: UIImage? = nil
     @State private var leftImage: UIImage? = nil
     @State private var rightImage: UIImage? = nil
     @State private var scalpImage: UIImage? = nil
     @State private var selectedSlot: Int = 0 // 0=front, 1=left, 2=right, 3=scalp
-    @State private var selectedItems: [PhotosPickerItem] = []
+    @State private var selectedItem: PhotosPickerItem? = nil
     @State private var isLoading = false
+    @State private var didHydratePhotosFromProfile = false
     
     var photoCount: Int {
         [frontImage, leftImage, rightImage, scalpImage].compactMap { $0 }.count
@@ -225,7 +223,7 @@ struct PhotoUploadStep: View {
                     isLoading: isLoading && selectedSlot == 0
                 ) {
                     selectedSlot = 0
-                    selectedItems = []
+                    showingSlotOptions = true
                 }
                 
                 PhotoSlotButton(
@@ -235,7 +233,7 @@ struct PhotoUploadStep: View {
                     isLoading: isLoading && selectedSlot == 1
                 ) {
                     selectedSlot = 1
-                    selectedItems = []
+                    showingSlotOptions = true
                 }
                 
                 PhotoSlotButton(
@@ -246,7 +244,7 @@ struct PhotoUploadStep: View {
                     isLoading: isLoading && selectedSlot == 2
                 ) {
                     selectedSlot = 2
-                    selectedItems = []
+                    showingSlotOptions = true
                 }
                 
                 PhotoSlotButton(
@@ -256,7 +254,7 @@ struct PhotoUploadStep: View {
                     isLoading: isLoading && selectedSlot == 3
                 ) {
                     selectedSlot = 3
-                    selectedItems = []
+                    showingSlotOptions = true
                 }
             }
             
@@ -273,58 +271,20 @@ struct PhotoUploadStep: View {
             .background(Color(hex: "F8F8F8"))
             .cornerRadius(12)
             
-            // Action Buttons
+            Text("Tap any tile to add from your library or camera.")
+                .font(.system(size: 12))
+                .foregroundColor(Color(hex: "888888"))
+                .multilineTextAlignment(.center)
+
+            // Next button
             VStack(spacing: 12) {
-                // Gallery Button - Primary way to add photos
-                PhotosPicker(
-                    selection: $selectedItems,
-                    maxSelectionCount: 1,
-                    matching: .images
-                ) {
-                    HStack(spacing: 10) {
-                        Image(systemName: "photo.stack")
-                            .font(.system(size: 16))
-                        Text("Choose from Library")
-                            .font(.system(size: 16, weight: .semibold))
-                    }
-                    .foregroundColor(.white)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 16)
-                    .background(Color(hex: "2D2D2D"))
-                    .cornerRadius(14)
-                }
-                .onChange(of: selectedItems) { _, newItems in
-                    guard let item = newItems.first else { return }
-                    isLoading = true
-                    Task {
-                        if let data = try? await item.loadTransferable(type: Data.self),
-                           let image = UIImage(data: data) {
-                            await MainActor.run {
-                                // Assign to the selected slot
-                                switch selectedSlot {
-                                case 0: frontImage = image
-                                case 1: leftImage = image
-                                case 2: rightImage = image
-                                case 3: scalpImage = image
-                                default: break
-                                }
-                                isLoading = false
-                                // Move to next empty slot
-                                advanceToNextEmptySlot()
-                            }
-                        } else {
-                            await MainActor.run {
-                                isLoading = false
-                            }
-                        }
-                    }
-                }
-                
-                // Continue/Skip Button
-                Button(action: onContinue) {
-                    Text(photoCount == 0 ? "Skip for now →" : "Continue with \(photoCount) photo\(photoCount == 1 ? "" : "s") →")
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundColor(photoCount == 0 ? Color(hex: "999999") : Color(hex: "FF6B9D"))
+                Button(action: {
+                    syncProfilePhotos()
+                    onContinue()
+                }) {
+                    Text(photoCount == 4 ? "Continue with 4 photos →" : "Next →")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(Color(hex: "FF6B9D"))
                 }
                 .padding(.top, 4)
             }
@@ -334,7 +294,7 @@ struct PhotoUploadStep: View {
                 Image(systemName: "lock.shield.fill")
                     .font(.system(size: 13))
                     .foregroundColor(Color(hex: "4ADE80"))
-                Text("Private & secure — never stored or shared")
+                Text("Private visual history is on by default. You can opt out anytime.")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundColor(Color(hex: "666666"))
             }
@@ -344,6 +304,65 @@ struct PhotoUploadStep: View {
             .background(Color(hex: "F0FDF4"))
             .cornerRadius(12)
         }
+        .confirmationDialog("Add photo", isPresented: $showingSlotOptions, titleVisibility: .visible) {
+            Button("Choose from Library") {
+                showingPhotoLibrary = true
+            }
+            if UIImagePickerController.isSourceTypeAvailable(.camera) {
+                Button("Take Photo") {
+                    showingCamera = true
+                }
+            }
+            if imageForSelectedSlot() != nil {
+                Button("Remove Photo", role: .destructive) {
+                    setImageForSelectedSlot(nil)
+                    syncProfilePhotos()
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Choose how you want to add this photo.")
+        }
+        .photosPicker(isPresented: $showingPhotoLibrary, selection: $selectedItem, matching: .images)
+        .onAppear {
+            guard !didHydratePhotosFromProfile else { return }
+            hydratePhotoStateFromProfile()
+            didHydratePhotosFromProfile = true
+        }
+        .onChange(of: selectedItem) { _, item in
+            guard let item else { return }
+            isLoading = true
+            Task {
+                if let data = try? await item.loadTransferable(type: Data.self),
+                   let image = UIImage(data: data) {
+                    await MainActor.run {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            setImageForSelectedSlot(image)
+                        }
+                        syncProfilePhotos()
+                        isLoading = false
+                        selectedItem = nil
+                        advanceToNextEmptySlot()
+                    }
+                } else {
+                    await MainActor.run {
+                        isLoading = false
+                        selectedItem = nil
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $showingCamera) {
+            CameraCaptureView { image in
+                if let image {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        setImageForSelectedSlot(image)
+                    }
+                    syncProfilePhotos()
+                    advanceToNextEmptySlot()
+                }
+            }
+        }
     }
     
     private func advanceToNextEmptySlot() {
@@ -351,6 +370,98 @@ struct PhotoUploadStep: View {
         else if leftImage == nil { selectedSlot = 1 }
         else if rightImage == nil { selectedSlot = 2 }
         else if scalpImage == nil { selectedSlot = 3 }
+    }
+
+    private func imageForSelectedSlot() -> UIImage? {
+        switch selectedSlot {
+        case 0: return frontImage
+        case 1: return leftImage
+        case 2: return rightImage
+        case 3: return scalpImage
+        default: return nil
+        }
+    }
+
+    private func setImageForSelectedSlot(_ image: UIImage?) {
+        switch selectedSlot {
+        case 0: frontImage = image
+        case 1: leftImage = image
+        case 2: rightImage = image
+        case 3: scalpImage = image
+        default: break
+        }
+    }
+
+    private func syncProfilePhotos() {
+        var encoded: [String] = []
+        if let frontImage, let payload = encodeImagePayload(frontImage) { encoded.append("front:\(payload)") }
+        if let leftImage, let payload = encodeImagePayload(leftImage) { encoded.append("left:\(payload)") }
+        if let rightImage, let payload = encodeImagePayload(rightImage) { encoded.append("right:\(payload)") }
+        if let scalpImage, let payload = encodeImagePayload(scalpImage) { encoded.append("scalp:\(payload)") }
+        profile.photos = encoded
+    }
+
+    private func hydratePhotoStateFromProfile() {
+        guard !profile.photos.isEmpty else { return }
+
+        for entry in profile.photos {
+            let parts = entry.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+            guard parts.count == 2 else { continue }
+
+            let slot = String(parts[0]).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let payload = String(parts[1])
+            guard let image = decodeImagePayload(payload) else { continue }
+
+            switch slot {
+            case "front":
+                frontImage = image
+            case "left":
+                leftImage = image
+            case "right":
+                rightImage = image
+            case "scalp":
+                scalpImage = image
+            default:
+                continue
+            }
+        }
+    }
+
+    private func decodeImagePayload(_ payload: String) -> UIImage? {
+        let trimmed = payload.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return nil }
+
+        let base64String: String
+        if trimmed.starts(with: "data:") {
+            guard let commaIndex = trimmed.firstIndex(of: ",") else { return nil }
+            base64String = String(trimmed[trimmed.index(after: commaIndex)...])
+        } else {
+            base64String = trimmed
+        }
+
+        guard let data = Data(base64Encoded: base64String, options: .ignoreUnknownCharacters) else {
+            return nil
+        }
+        return UIImage(data: data)
+    }
+
+    private func encodeImagePayload(_ image: UIImage) -> String? {
+        let resized = resizedImageIfNeeded(image, maxDimension: 1280)
+        guard let jpegData = resized.jpegData(compressionQuality: 0.75) else { return nil }
+        return "data:image/jpeg;base64,\(jpegData.base64EncodedString())"
+    }
+
+    private func resizedImageIfNeeded(_ image: UIImage, maxDimension: CGFloat) -> UIImage {
+        let size = image.size
+        let currentMax = max(size.width, size.height)
+        guard currentMax > maxDimension else { return image }
+
+        let scale = maxDimension / currentMax
+        let targetSize = CGSize(width: size.width * scale, height: size.height * scale)
+        let renderer = UIGraphicsImageRenderer(size: targetSize)
+        return renderer.image { _ in
+            image.draw(in: CGRect(origin: .zero, size: targetSize))
+        }
     }
 }
 
@@ -604,38 +715,41 @@ struct PhotoSlot: View {
 }
 
 
-// MARK: - Camera View (Placeholder)
-struct CameraView: View {
-    @Binding var images: [UIImage]
-    @Environment(\.dismiss) var dismiss
-    
-    var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-            
-            VStack(spacing: 20) {
-                Spacer()
-                
-                Image(systemName: "camera.viewfinder")
-                    .font(.system(size: 80))
-                    .foregroundColor(.white.opacity(0.5))
-                
-                Text("Camera access required")
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundColor(.white)
-                
-                Text("Enable camera in Settings to take photos")
-                    .font(.system(size: 14))
-                    .foregroundColor(.white.opacity(0.7))
-                
-                Spacer()
-                
-                Button("Close") {
-                    dismiss()
-                }
-                .foregroundColor(.white)
-                .padding(.bottom, 50)
-            }
+// MARK: - Camera Capture
+struct CameraCaptureView: UIViewControllerRepresentable {
+    let onFinish: (UIImage?) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.sourceType = .camera
+        picker.allowsEditing = false
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
+    final class Coordinator: NSObject, UINavigationControllerDelegate, UIImagePickerControllerDelegate {
+        let parent: CameraCaptureView
+
+        init(parent: CameraCaptureView) {
+            self.parent = parent
+        }
+
+        func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey : Any]) {
+            let image = (info[.editedImage] as? UIImage) ?? (info[.originalImage] as? UIImage)
+            parent.onFinish(image)
+            parent.dismiss()
+        }
+
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            parent.onFinish(nil)
+            parent.dismiss()
         }
     }
 }

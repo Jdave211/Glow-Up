@@ -3,17 +3,21 @@
   "version": "1.0.0",
   "private": true,
   "workspaces": [
-    "server",
-    "mobile"
+    "server"
   ],
   "scripts": {
+    "build:server": "npm run --workspace server build",
+    "start:server": "npm run --workspace server start",
+    "heroku-postbuild": "npm run build:server",
     "server": "cd server && npm run dev",
     "mobile": "cd mobile && npx expo start --ios",
     "dev": "npm run server & npm run mobile"
+  },
+  "engines": {
+    "node": ">=20 <26",
+    "npm": ">=10"
   }
 }
-
-
 
 
 

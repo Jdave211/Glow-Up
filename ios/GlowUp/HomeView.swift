@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 // ═══════════════════════════════════════════════════
 // MARK: - HomeViewModel (fetches from fine-tuned model)
@@ -9,9 +10,15 @@ class HomeViewModel: ObservableObject {
     @Published var isLoading = false
     @Published var hasLoaded = false
     @Published var errorMessage: String?
+    @Published var livePickedForYou: [FeedProduct] = []
+    @Published var isRefreshingPickedForYou = false
+    
+    private var pickedForYouTargetCount = 0
+    private var replacementCooldownUntil: Date = .distantPast
+    private var recentReplacementIds: [String] = []
     
     // Sections
-    var pickedForYou: [FeedProduct] { feed?.sections.picked_for_you ?? [] }
+    var pickedForYou: [FeedProduct] { livePickedForYou }
     var trending: [FeedProduct] { feed?.sections.trending ?? [] }
     var newArrivals: [FeedProduct] { feed?.sections.new_arrivals ?? [] }
     var morningSteps: [FeedRoutineStep] { feed?.routine?.morning ?? [] }
@@ -37,6 +44,8 @@ class HomeViewModel: ObservableObject {
                 let result = try await APIService.shared.fetchHomeFeed(userId: userId)
                 await MainActor.run {
                     self.feed = result
+                    self.livePickedForYou = result.sections.picked_for_you
+                    self.pickedForYouTargetCount = max(result.sections.picked_for_you.count, 4)
                     self.isLoading = false
                     self.hasLoaded = true
                 }
@@ -55,6 +64,131 @@ class HomeViewModel: ObservableObject {
     func refresh() {
         loadFeed(force: true)
     }
+    
+    func replacePickedForYouAfterAddToCart(_ addedProduct: FeedProduct, cartProductIds: Set<String>) {
+        guard let slotIndex = livePickedForYou.firstIndex(where: { $0.id == addedProduct.id }) else { return }
+        
+        let existingIds = Set(livePickedForYou.map(\.id))
+        var exclusion = existingIds.union(cartProductIds)
+        exclusion.insert(addedProduct.id)
+        
+        if let localFallback = localFallbackReplacement(excluding: exclusion) {
+            livePickedForYou[slotIndex] = localFallback
+            exclusion.insert(localFallback.id)
+        } else {
+            livePickedForYou.remove(at: slotIndex)
+        }
+        
+        Task {
+            await self.fillPickedForYouSlot(
+                preferredIndex: slotIndex,
+                baseProduct: addedProduct,
+                cartProductIds: cartProductIds,
+                force: true
+            )
+        }
+    }
+    
+    func maybeDynamicallyRefreshPickedForYou(cartProductIds: Set<String>) {
+        guard hasLoaded, !livePickedForYou.isEmpty, !isRefreshingPickedForYou else { return }
+        guard Date() >= replacementCooldownUntil else { return }
+        
+        let candidates = livePickedForYou.enumerated().filter { !cartProductIds.contains($0.element.id) }
+        guard let target = candidates.randomElement() else { return }
+        
+        replacementCooldownUntil = Date().addingTimeInterval(25)
+        Task {
+            await self.fillPickedForYouSlot(
+                preferredIndex: target.offset,
+                baseProduct: target.element,
+                cartProductIds: cartProductIds,
+                force: false
+            )
+        }
+    }
+    
+    func ensurePickedForYouExcludesCart(cartProductIds: Set<String>) {
+        guard !livePickedForYou.isEmpty else { return }
+        guard let cartProduct = livePickedForYou.first(where: { cartProductIds.contains($0.id) }) else { return }
+        replacePickedForYouAfterAddToCart(cartProduct, cartProductIds: cartProductIds)
+    }
+    
+    private func fillPickedForYouSlot(
+        preferredIndex: Int,
+        baseProduct: FeedProduct,
+        cartProductIds: Set<String>,
+        force: Bool
+    ) async {
+        await MainActor.run { self.isRefreshingPickedForYou = true }
+        defer {
+            Task { @MainActor in
+                self.isRefreshingPickedForYou = false
+            }
+        }
+        
+        guard let userId = SessionManager.shared.userId else { return }
+        
+        let query = replacementQuery(for: baseProduct)
+        let recentIds = await MainActor.run { Set(self.recentReplacementIds.suffix(24)) }
+        let currentIds = await MainActor.run { Set(self.livePickedForYou.map(\.id)) }
+        let exclusion = currentIds.union(cartProductIds).union(recentIds).union([baseProduct.id])
+        
+        do {
+            let fetched = try await APIService.shared.searchRoutineProducts(
+                userId: userId,
+                query: query,
+                category: baseProduct.category,
+                limit: 20
+            )
+            let replacement = fetched.first { !exclusion.contains($0.id) }
+            guard let replacement else { return }
+            
+            await MainActor.run {
+                var list = self.livePickedForYou
+                let currentIndex = list.firstIndex(where: { $0.id == baseProduct.id }) ?? min(preferredIndex, max(list.count - 1, 0))
+                
+                if list.isEmpty {
+                    list = [replacement]
+                } else if currentIndex >= 0 && currentIndex < list.count {
+                    list[currentIndex] = replacement
+                } else {
+                    list.append(replacement)
+                }
+                
+                while list.count > max(self.pickedForYouTargetCount, 4) {
+                    list.removeLast()
+                }
+                
+                self.livePickedForYou = list
+                self.recentReplacementIds.append(replacement.id)
+                if self.recentReplacementIds.count > 80 {
+                    self.recentReplacementIds.removeFirst(self.recentReplacementIds.count - 80)
+                }
+            }
+        } catch {
+            if force {
+                #if DEBUG
+                print("⚠️ Picked-for-you DB replacement failed: \(error)")
+                #endif
+            }
+        }
+    }
+    
+    private func localFallbackReplacement(excluding exclusion: Set<String>) -> FeedProduct? {
+        let fallbackPool = (trending + newArrivals).filter { !exclusion.contains($0.id) }
+        return fallbackPool.first
+    }
+    
+    private func replacementQuery(for product: FeedProduct) -> String {
+        if let concerns = product.target_concerns, let first = concerns.first, !first.isEmpty {
+            return "\(first) skincare"
+        }
+        if !product.category.isEmpty {
+            return "\(product.category) skincare"
+        }
+        let namePrefix = product.name.split(separator: " ").prefix(2).joined(separator: " ")
+        return namePrefix.isEmpty ? "skincare routine" : "\(namePrefix) skincare"
+    }
 }
 
 // ═══════════════════════════════════════════════════
@@ -69,6 +203,7 @@ struct HomeView: View {
     @State private var completedSteps: Set<String> = []
     @State private var streaks: (morning: Int, evening: Int) = (0, 0)
     @State private var showingQuickBuy = false
+    private let pickedForYouRefreshTimer = Timer.publish(every: 35, on: .main, in: .common).autoconnect()
     
     enum RoutineType: Identifiable {
         case morning
@@ -161,6 +296,13 @@ struct HomeView: View {
         .onAppear {
             viewModel.loadFeed()
             loadCheckins()
+            viewModel.ensurePickedForYouExcludesCart(cartProductIds: cartProductIds())
+        }
+        .onReceive(pickedForYouRefreshTimer) { _ in
+            viewModel.maybeDynamicallyRefreshPickedForYou(cartProductIds: cartProductIds())
+        }
+        .onChange(of: cartManager.itemCount) { _, _ in
+            viewModel.ensurePickedForYouExcludesCart(cartProductIds: cartProductIds())
         }
         .sheet(isPresented: $showingQuickBuy) {
             QuickBuySheet(cartManager: cartManager)
@@ -169,9 +311,15 @@ struct HomeView: View {
             RoutineDetailSheet(
                 routineType: routineType,
                 steps: routineSteps(for: routineType),
+                morningSteps: viewModel.morningSteps,
+                eveningSteps: viewModel.eveningSteps,
+                weeklySteps: viewModel.weeklySteps,
                 completedSteps: $completedSteps,
                 streaks: $streaks,
-                userId: SessionManager.shared.userId ?? ""
+                userId: SessionManager.shared.userId ?? "",
+                onRoutineUpdated: {
+                    viewModel.refresh()
+                }
             )
         }
     }
@@ -247,7 +395,10 @@ struct HomeView: View {
                     title: "Picked For You",
                     subtitle: "Based on your profile",
                     products: viewModel.pickedForYou,
-                    accent: Color(hex: "FF6B9D")
+                    accent: Color(hex: "FF6B9D"),
+                    onAddToCart: { product in
+                        viewModel.replacePickedForYouAfterAddToCart(product, cartProductIds: cartProductIds())
+                    }
                 )
             }
             
@@ -369,7 +520,13 @@ struct HomeView: View {
     // ─────────────────────────────────────────────
     // MARK: - Product Section (reusable)
     // ─────────────────────────────────────────────
-    private func productSection(title: String, subtitle: String, products: [FeedProduct], accent: Color) -> some View {
+    private func productSection(
+        title: String,
+        subtitle: String,
+        products: [FeedProduct],
+        accent: Color,
+        onAddToCart: ((FeedProduct) -> Void)? = nil
+    ) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
@@ -395,6 +552,7 @@ struct HomeView: View {
                         } onAddToCart: {
                             UIImpactFeedbackGenerator(style: .light).impactOccurred()
                             cartManager.addToCart(product.asInferenceProduct)
+                            onAddToCart?(product)
                         }
                     }
                 }
@@ -624,6 +782,10 @@ struct HomeView: View {
         case .evening: return viewModel.eveningSteps
         case .weekly: return viewModel.weeklySteps
         }
+    }
+    
+    private func cartProductIds() -> Set<String> {
+        Set(cartManager.items.map { $0.product.id })
     }
 }
 
@@ -1457,12 +1619,27 @@ struct QuickBuyRow: View {
 struct RoutineDetailSheet: View {
     let routineType: HomeView.RoutineType
     let steps: [FeedRoutineStep]
+    let morningSteps: [FeedRoutineStep]
+    let eveningSteps: [FeedRoutineStep]
+    let weeklySteps: [FeedRoutineStep]
     @Binding var completedSteps: Set<String>
     @Binding var streaks: (morning: Int, evening: Int)
     let userId: String
+    let onRoutineUpdated: (() -> Void)?
     
     @Environment(\.dismiss) private var dismiss
     @State private var isLoading = false
+    @State private var isEditing = false
+    @State private var isSavingRoutine = false
+    @State private var saveError: String?
+    @State private var shareItems: [Any] = []
+    @State private var showShareSheet = false
+    @State private var isPreparingShare = false
+    @State private var shareError: String?
+    @State private var editableSteps: [EditableRoutineStep] = []
+    @State private var showingStepEditor = false
+    @State private var editingStepLocalId: String?
+    @State private var editorDraft = EditableRoutineStep.blank(step: 1, frequency: "daily")
     
     private var routineTypeStr: String {
         switch routineType {
@@ -1503,13 +1680,46 @@ struct RoutineDetailSheet: View {
         case .weekly: return 0
         }
     }
+
+    private var defaultFrequency: String {
+        routineType == .weekly ? "weekly" : "daily"
+    }
+
+    private var frequencyOptions: [String] {
+        routineType == .weekly ? ["weekly"] : ["daily", "weekly"]
+    }
+
+    private var orderedEditableSteps: [EditableRoutineStep] {
+        editableSteps.sorted { $0.step < $1.step }
+    }
     
     private var isComplete: Bool {
-        guard !steps.isEmpty else { return false }
-        return steps.allSatisfy { step in
+        let activeSteps = orderedEditableSteps.map { $0.asFeedStep }
+        guard !activeSteps.isEmpty else { return false }
+        return activeSteps.allSatisfy { step in
             let key = "\(routineTypeStr):\(step.id)"
             return completedSteps.contains(key)
         }
+    }
+
+    private var shareText: String {
+        let lines = orderedEditableSteps.map { step -> String in
+            var out = "\(step.step). \(step.name)"
+            if let productName = step.productName, !productName.isEmpty {
+                out += " - \(productName)"
+            }
+            if let brand = step.productBrand, !brand.isEmpty {
+                out += " (\(brand))"
+            }
+            if let productId = step.productId, !productId.isEmpty {
+                out += "\n   Product ID: \(productId)"
+            }
+            if !step.instructions.isEmpty {
+                out += "\n   \(step.instructions)"
+            }
+            return out
+        }
+        return "\(title)\n\n" + lines.joined(separator: "\n\n")
     }
     
     var body: some View {
@@ -1541,18 +1751,73 @@ struct RoutineDetailSheet: View {
                         }
                     }
                     .padding(.top, 20)
+
+                    if isEditing {
+                        Text("Edit mode: choose specific products, adjust steps, then save.")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(Color(hex: "777777"))
+                            .padding(.horizontal, 20)
+                    }
                     
                     VStack(spacing: 16) {
-                        ForEach(steps) { step in
+                        ForEach(orderedEditableSteps) { editableStep in
+                            let step = editableStep.asFeedStep
                             RoutineStepRow(
                                 step: step,
                                 isCompleted: completedSteps.contains("\(routineTypeStr):\(step.id)"),
                                 accentColor: accentColor,
-                                onToggle: { toggleStep(step) }
+                                onToggle: { toggleStep(step) },
+                                onEdit: isEditing ? { beginEditing(step: editableStep) } : nil,
+                                onDelete: isEditing ? { deleteStep(step: editableStep) } : nil
                             )
                         }
                     }
                     .padding(.horizontal, 20)
+
+                    if isEditing {
+                        VStack(spacing: 12) {
+                            Button(action: addStep) {
+                                HStack(spacing: 8) {
+                                    Image(systemName: "plus.circle.fill")
+                                    Text("Add Step")
+                                        .font(.system(size: 15, weight: .semibold))
+                                }
+                                .foregroundColor(accentColor)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 12)
+                                .background(accentColor.opacity(0.12))
+                                .cornerRadius(12)
+                            }
+                            .buttonStyle(PlainButtonStyle())
+
+                            Button(action: saveRoutineEdits) {
+                                HStack(spacing: 8) {
+                                    if isSavingRoutine {
+                                        ProgressView().tint(.white)
+                                    } else {
+                                        Image(systemName: "checkmark.circle.fill")
+                                    }
+                                    Text(isSavingRoutine ? "Saving..." : "Save Routine")
+                                        .font(.system(size: 15, weight: .semibold))
+                                }
+                                .foregroundColor(.white)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 12)
+                                .background(accentColor)
+                                .cornerRadius(12)
+                            }
+                            .buttonStyle(PlainButtonStyle())
+                            .disabled(isSavingRoutine || orderedEditableSteps.isEmpty)
+
+                            if let saveError {
+                                Text(saveError)
+                                    .font(.system(size: 12))
+                                    .foregroundColor(Color(hex: "D64545"))
+                                    .multilineTextAlignment(.center)
+                            }
+                        }
+                        .padding(.horizontal, 20)
+                    }
                     
                     if isComplete {
                         VStack(spacing: 8) {
@@ -1574,7 +1839,42 @@ struct RoutineDetailSheet: View {
             }
             .background(PinkDrapeBackground().ignoresSafeArea())
             .navigationBarTitleDisplayMode(.inline)
+            .onAppear {
+                resetEditableSteps()
+            }
+            .sheet(isPresented: $showingStepEditor) {
+                RoutineStepEditorSheet(
+                    draft: $editorDraft,
+                    userId: userId,
+                    frequencyOptions: frequencyOptions,
+                    onSave: applyEditorDraft
+                )
+            }
+            .sheet(isPresented: $showShareSheet) {
+                ActivityShareSheet(items: shareItems)
+            }
             .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button(action: prepareShare) {
+                        Image(systemName: "square.and.arrow.up")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(isPreparingShare ? Color(hex: "AAAAAA") : Color(hex: "666666"))
+                    }
+                    .disabled(isPreparingShare)
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(action: {
+                        if isEditing {
+                            resetEditableSteps()
+                            saveError = nil
+                        }
+                        isEditing.toggle()
+                    }) {
+                        Text(isEditing ? "Cancel" : "Edit")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(accentColor)
+                    }
+                }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button(action: { dismiss() }) {
                         Image(systemName: "xmark")
@@ -1586,6 +1886,107 @@ struct RoutineDetailSheet: View {
                     }
                 }
             }
+        }
+    }
+
+    private func resetEditableSteps() {
+        editableSteps = steps
+            .sorted { $0.step < $1.step }
+            .map(EditableRoutineStep.init(feedStep:))
+    }
+
+    private func beginEditing(step: EditableRoutineStep) {
+        editingStepLocalId = step.localId
+        editorDraft = step
+        showingStepEditor = true
+    }
+
+    private func addStep() {
+        let nextStep = max(orderedEditableSteps.count + 1, 1)
+        editingStepLocalId = nil
+        editorDraft = .blank(step: nextStep, frequency: defaultFrequency)
+        showingStepEditor = true
+    }
+
+    private func deleteStep(step: EditableRoutineStep) {
+        editableSteps.removeAll { $0.localId == step.localId }
+        normalizeStepOrdering()
+    }
+
+    private func applyEditorDraft() {
+        if let localId = editingStepLocalId, let idx = editableSteps.firstIndex(where: { $0.localId == localId }) {
+            editableSteps[idx] = editorDraft
+        } else {
+            editableSteps.append(editorDraft)
+        }
+        editingStepLocalId = nil
+        normalizeStepOrdering()
+    }
+
+    private func normalizeStepOrdering() {
+        let sorted = editableSteps.sorted { $0.step < $1.step }
+        editableSteps = sorted.enumerated().map { index, item in
+            var copy = item
+            copy.step = index + 1
+            if copy.frequency.isEmpty { copy.frequency = defaultFrequency }
+            return copy
+        }
+    }
+
+    private func saveRoutineEdits() {
+        guard !userId.isEmpty else { return }
+        guard !orderedEditableSteps.isEmpty else { return }
+        isSavingRoutine = true
+        saveError = nil
+
+        let edited = orderedEditableSteps.map { $0.asUpdateStep }
+        let morningPayload = routineType == .morning
+            ? edited
+            : routinePayloadSteps(from: morningSteps, frequency: "daily")
+        let eveningPayload = routineType == .evening
+            ? edited
+            : routinePayloadSteps(from: eveningSteps, frequency: "daily")
+        let weeklyPayload = routineType == .weekly
+            ? edited
+            : routinePayloadSteps(from: weeklySteps, frequency: "weekly")
+
+        Task {
+            do {
+                try await APIService.shared.updateRoutine(
+                    userId: userId,
+                    morning: morningPayload,
+                    evening: eveningPayload,
+                    weekly: weeklyPayload,
+                    summary: "Routine updated from app"
+                )
+                _ = await NotificationManager.shared.syncScheduledNotifications(userId: userId)
+                let response = try await APIService.shared.getTodayCheckins(userId: userId)
+                await MainActor.run {
+                    completedSteps = Set(response.checkins)
+                    streaks = (response.streaks.morning, response.streaks.evening)
+                    isSavingRoutine = false
+                    isEditing = false
+                    onRoutineUpdated?()
+                }
+            } catch {
+                await MainActor.run {
+                    isSavingRoutine = false
+                    saveError = "Couldn't save right now. Please try again."
+                }
+            }
+        }
+    }
+
+    private func routinePayloadSteps(from feedSteps: [FeedRoutineStep], frequency: String) -> [APIService.RoutineUpdateStep] {
+        feedSteps.map { step in
+            APIService.RoutineUpdateStep(
+                step: step.step,
+                name: step.name,
+                instructions: step.tip ?? "",
+                frequency: frequency,
+                product_id: step.product_id,
+                product_name: step.product_name
+            )
         }
     }
     
@@ -1627,6 +2028,324 @@ struct RoutineDetailSheet: View {
             }
         }
     }
+
+    private func prepareShare() {
+        guard !userId.isEmpty else { return }
+        isPreparingShare = true
+        shareError = nil
+        Task {
+            do {
+                let response = try await APIService.shared.createRoutineShareLink(userId: userId, routineType: routineTypeStr)
+                let url = URL(string: response.share_url)
+                let fallback = "\(title)\n\n\(shareText)"
+                await MainActor.run {
+                    var items: [Any] = [fallback]
+                    if let url { items.insert(url, at: 0) }
+                    shareItems = items
+                    isPreparingShare = false
+                    showShareSheet = true
+                }
+            } catch {
+                await MainActor.run {
+                    isPreparingShare = false
+                    shareError = "Couldn't prepare share link right now."
+                }
+            }
+        }
+    }
+}
+
+struct EditableRoutineStep: Identifiable {
+    let localId: String
+    var step: Int
+    var name: String
+    var instructions: String
+    var frequency: String
+    var productId: String?
+    var productName: String?
+    var productBrand: String?
+    var productPrice: Double?
+    var productImage: String?
+    var buyLink: String?
+
+    var id: String { localId }
+
+    init(
+        localId: String = UUID().uuidString,
+        step: Int,
+        name: String,
+        instructions: String,
+        frequency: String,
+        productId: String? = nil,
+        productName: String? = nil,
+        productBrand: String? = nil,
+        productPrice: Double? = nil,
+        productImage: String? = nil,
+        buyLink: String? = nil
+    ) {
+        self.localId = localId
+        self.step = step
+        self.name = name
+        self.instructions = instructions
+        self.frequency = frequency
+        self.productId = productId
+        self.productName = productName
+        self.productBrand = productBrand
+        self.productPrice = productPrice
+        self.productImage = productImage
+        self.buyLink = buyLink
+    }
+
+    init(feedStep: FeedRoutineStep) {
+        self.localId = UUID().uuidString
+        self.step = feedStep.step
+        self.name = feedStep.name
+        self.instructions = feedStep.tip ?? ""
+        self.frequency = "daily"
+        self.productId = feedStep.product_id
+        self.productName = feedStep.product_name
+        self.productBrand = feedStep.product_brand
+        self.productPrice = feedStep.product_price
+        self.productImage = feedStep.product_image
+        self.buyLink = feedStep.buy_link
+    }
+
+    static func blank(step: Int, frequency: String) -> EditableRoutineStep {
+        EditableRoutineStep(
+            step: step,
+            name: "",
+            instructions: "",
+            frequency: frequency
+        )
+    }
+
+    var asFeedStep: FeedRoutineStep {
+        FeedRoutineStep(
+            step: step,
+            name: name,
+            tip: instructions,
+            product_id: productId,
+            product_name: productName,
+            product_brand: productBrand,
+            product_price: productPrice,
+            product_image: productImage,
+            buy_link: buyLink
+        )
+    }
+
+    var asUpdateStep: APIService.RoutineUpdateStep {
+        APIService.RoutineUpdateStep(
+            step: step,
+            name: name.isEmpty ? "Step \(step)" : name,
+            instructions: instructions,
+            frequency: frequency.isEmpty ? "daily" : frequency,
+            product_id: productId,
+            product_name: productName
+        )
+    }
+}
+
+struct RoutineStepEditorSheet: View {
+    @Binding var draft: EditableRoutineStep
+    let userId: String
+    let frequencyOptions: [String]
+    let onSave: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var searchQuery = ""
+    @State private var searchResults: [FeedProduct] = []
+    @State private var isSearching = false
+    @State private var searchError: String?
+
+    var body: some View {
+        NavigationView {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    Stepper(value: $draft.step, in: 1...12) {
+                        Text("Step \(draft.step)")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundColor(Color(hex: "2D2D2D"))
+                    }
+
+                    TextField("Step title (e.g. Brightening Serum)", text: $draft.name)
+                        .textFieldStyle(.roundedBorder)
+
+                    TextField("Instructions", text: $draft.instructions, axis: .vertical)
+                        .lineLimit(3, reservesSpace: true)
+                        .textFieldStyle(.roundedBorder)
+
+                    Picker("Frequency", selection: $draft.frequency) {
+                        ForEach(frequencyOptions, id: \.self) { opt in
+                            Text(opt.capitalized).tag(opt)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Attach Product")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundColor(Color(hex: "2D2D2D"))
+
+                        HStack(spacing: 8) {
+                            TextField("Search product name or concern", text: $searchQuery)
+                                .textFieldStyle(.roundedBorder)
+
+                            Button(action: runSearch) {
+                                if isSearching {
+                                    ProgressView().tint(.white)
+                                } else {
+                                    Text("Search")
+                                        .font(.system(size: 13, weight: .semibold))
+                                }
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 9)
+                            .background(Color(hex: "FF6B9D"))
+                            .foregroundColor(.white)
+                            .cornerRadius(10)
+                            .disabled(isSearching || searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        }
+
+                        if let productName = draft.productName, !productName.isEmpty {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(productName)
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .foregroundColor(Color(hex: "2D2D2D"))
+                                HStack(spacing: 6) {
+                                    if let brand = draft.productBrand, !brand.isEmpty {
+                                        Text(brand)
+                                    }
+                                    if let price = draft.productPrice {
+                                        Text(String(format: "$%.2f", price))
+                                    }
+                                }
+                                .font(.system(size: 12))
+                                .foregroundColor(Color(hex: "777777"))
+                                if let productId = draft.productId, !productId.isEmpty {
+                                    Text("ID: \(productId)")
+                                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                        .foregroundColor(Color(hex: "999999"))
+                                }
+                                Button("Remove Product") {
+                                    draft.productId = nil
+                                    draft.productName = nil
+                                    draft.productBrand = nil
+                                    draft.productPrice = nil
+                                    draft.productImage = nil
+                                    draft.buyLink = nil
+                                }
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundColor(Color(hex: "D64545"))
+                            }
+                            .padding(10)
+                            .background(Color(hex: "FFF8FA"))
+                            .cornerRadius(10)
+                        }
+
+                        if let searchError {
+                            Text(searchError)
+                                .font(.system(size: 12))
+                                .foregroundColor(Color(hex: "D64545"))
+                        }
+
+                        VStack(spacing: 8) {
+                            ForEach(searchResults) { product in
+                                Button(action: { selectProduct(product) }) {
+                                    HStack(spacing: 10) {
+                                        VStack(alignment: .leading, spacing: 3) {
+                                            Text(product.name)
+                                                .font(.system(size: 13, weight: .semibold))
+                                                .foregroundColor(Color(hex: "2D2D2D"))
+                                                .multilineTextAlignment(.leading)
+                                            Text("\(product.brand) • \(String(format: "$%.2f", product.price))")
+                                                .font(.system(size: 12))
+                                                .foregroundColor(Color(hex: "666666"))
+                                            Text("ID: \(product.id)")
+                                                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                                                .foregroundColor(Color(hex: "999999"))
+                                                .lineLimit(1)
+                                                .truncationMode(.middle)
+                                        }
+                                        Spacer()
+                                    }
+                                    .padding(10)
+                                    .background(Color.white)
+                                    .cornerRadius(10)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 10)
+                                            .stroke(Color(hex: "F0E0E8"), lineWidth: 1)
+                                    )
+                                }
+                                .buttonStyle(PlainButtonStyle())
+                            }
+                        }
+                    }
+                }
+                .padding(16)
+            }
+            .background(Color(hex: "FFF5F8").ignoresSafeArea())
+            .navigationTitle("Edit Routine Step")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Save") {
+                        if draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            draft.name = draft.productName ?? "Step \(draft.step)"
+                        }
+                        if draft.frequency.isEmpty {
+                            draft.frequency = "daily"
+                        }
+                        onSave()
+                        dismiss()
+                    }
+                }
+            }
+        }
+    }
+
+    private func runSearch() {
+        let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return }
+        isSearching = true
+        searchError = nil
+
+        Task {
+            do {
+                let products = try await APIService.shared.searchRoutineProducts(
+                    userId: userId.isEmpty ? nil : userId,
+                    query: query,
+                    limit: 8
+                )
+                await MainActor.run {
+                    searchResults = products
+                    isSearching = false
+                    if products.isEmpty {
+                        searchError = "No products found. Try another keyword."
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    isSearching = false
+                    searchError = "Search failed. Please try again."
+                }
+            }
+        }
+    }
+
+    private func selectProduct(_ product: FeedProduct) {
+        draft.productId = product.id
+        draft.productName = product.name
+        draft.productBrand = product.brand
+        draft.productPrice = product.price
+        draft.productImage = product.image_url
+        draft.buyLink = product.buy_link
+        if draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            draft.name = product.category.capitalized
+        }
+    }
 }
 
 struct RoutineStepRow: View {
@@ -1634,6 +2353,8 @@ struct RoutineStepRow: View {
     let isCompleted: Bool
     let accentColor: Color
     let onToggle: () -> Void
+    let onEdit: (() -> Void)?
+    let onDelete: (() -> Void)?
     
     var body: some View {
         HStack(alignment: .top, spacing: 16) {
@@ -1667,6 +2388,30 @@ struct RoutineStepRow: View {
                         .cornerRadius(6)
                     
                     Spacer()
+
+                    if let onEdit {
+                        Button(action: onEdit) {
+                            Image(systemName: "pencil")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundColor(accentColor)
+                                .padding(6)
+                                .background(accentColor.opacity(0.12))
+                                .clipShape(Circle())
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                    }
+
+                    if let onDelete {
+                        Button(action: onDelete) {
+                            Image(systemName: "trash")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundColor(Color(hex: "D64545"))
+                                .padding(6)
+                                .background(Color(hex: "FFEDEE"))
+                                .clipShape(Circle())
+                        }
+                        .buttonStyle(PlainButtonStyle())
+                    }
                 }
                 
                 Text(step.name)
@@ -1676,7 +2421,7 @@ struct RoutineStepRow: View {
                     .opacity(isCompleted ? 0.6 : 1.0)
                 
                 // Show product info when available
-                if step.hasProduct {
+                if step.hasProduct || !(step.product_name ?? "").isEmpty {
                     HStack(spacing: 10) {
                         if let imgUrl = step.product_image, let url = URL(string: imgUrl) {
                             AsyncImage(url: url) { image in
@@ -1712,6 +2457,14 @@ struct RoutineStepRow: View {
                                         .foregroundColor(accentColor)
                                 }
                             }
+
+                            if let productId = step.product_id, !productId.isEmpty {
+                                Text("ID \(productId)")
+                                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                                    .foregroundColor(Color(hex: "A0A0A0"))
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
                         }
                     }
                     .padding(10)
@@ -1742,6 +2495,16 @@ struct RoutineStepRow: View {
 // ═══════════════════════════════════════════════════
 // MARK: - Preview
 // ═══════════════════════════════════════════════════
+
+struct ActivityShareSheet: UIViewControllerRepresentable {
+    let items: [Any]
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: items, applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
+}
 
 #Preview {
     HomeView(

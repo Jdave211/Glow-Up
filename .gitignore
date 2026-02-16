@@ -45,3 +45,16 @@ next-env.d.ts
 server/.browser-session/
 checkout-debug.png
 checkout-error.png
+
+# iOS / Xcode local state
+DerivedData/
+*.xcworkspace/xcuserdata/
+*.xcuserdatad
+*.xcuserstate
+
+# signing keys and certs
+*.p8
+*.p12
+*.key
+*.mobileprovision
+*.jks

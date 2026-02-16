@@ -1,50 +1,20 @@
 "use strict";
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.FulfillmentAgent = void 0;
-const playwright_1 = require("playwright");
-const path = __importStar(require("path"));
-const fs = __importStar(require("fs"));
+const puppeteer_1 = __importDefault(require("puppeteer"));
+const path_1 = __importDefault(require("path"));
+const fs_1 = __importDefault(require("fs"));
 // ═══════════════════════════════════════════════════════════════
-// ULTA FULFILLMENT AGENT — Real Purchasing Automation (Safari)
+// ULTA FULFILLMENT AGENT — Real Purchasing Automation
 // ═══════════════════════════════════════════════════════════════
 //
 // Flow:
-//   1.  Setup (once) — launch visible Safari, user logs into Ulta,
+//   1.  Setup (once) — launch visible browser, user logs into Ulta,
 //       session is saved to disk so future runs are already authenticated.
-//   2.  Purchase — headless Safari reuses saved session:
+//   2.  Purchase — headless browser reuses saved session:
 //       a. For each item → navigate to buy_link → click "Add to Bag"
 //       b. Go to cart → proceed to checkout
 //       c. Fill / confirm shipping address
@@ -53,195 +23,90 @@ const fs = __importStar(require("fs"));
 //   3.  Return order confirmation details to the app.
 //
 // ═══════════════════════════════════════════════════════════════
-const SESSION_DIR = path.resolve(__dirname, '../../.browser-session');
-const STORAGE_STATE_PATH = path.join(SESSION_DIR, 'storage-state.json');
-const NAV_TIMEOUT_MS = 30000;
-const CHECKOUT_SETTLE_MS = 2500;
-const UI_SETTLE_MS = 800;
+const SESSION_DIR = path_1.default.resolve(__dirname, '../../.browser-session');
+// Pending orders waiting for confirmation
+const pendingOrders = new Map();
 class FulfillmentAgent {
     // ─────────────────────────────────────────────────
-    // SETUP: Launch visible Safari for manual Ulta login
+    // SETUP: Launch visible browser for manual Ulta login
     // Run this ONCE to save the session.
     // ─────────────────────────────────────────────────
     static async setupSession() {
         // Ensure session dir exists
-        if (!fs.existsSync(SESSION_DIR)) {
-            fs.mkdirSync(SESSION_DIR, { recursive: true });
+        if (!fs_1.default.existsSync(SESSION_DIR)) {
+            fs_1.default.mkdirSync(SESSION_DIR, { recursive: true });
         }
-        console.log('🔐 Launching visible Safari for Ulta login...');
-        console.log(`   Session will be saved to: ${STORAGE_STATE_PATH}`);
-        let browser = null;
-        let context = null;
-        try {
-            browser = await playwright_1.webkit.launch({
-                headless: false, // VISIBLE so user can log in
-            });
-            context = await browser.newContext({
-                viewport: { width: 1280, height: 900 },
-                userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.2 Safari/605.1.15'
-            });
-            const page = await context.newPage();
-            // Navigate to Ulta home page first (more natural, avoids blocking)
-            console.log('Navigating to Ulta home page...');
-            await page.goto('https://www.ulta.com', {
-                waitUntil: 'domcontentloaded',
-                timeout: 30000
-            });
-            await delay(3000); // Wait for page to fully load
-            // Check if we hit the "will be back shortly" page
-            const pageContent = await page.evaluate(() => document.body?.innerText || '');
-            if (pageContent.toLowerCase().includes('will be back shortly') ||
-                pageContent.toLowerCase().includes('maintenance') ||
-                pageContent.toLowerCase().includes('temporarily unavailable')) {
-                console.log('⚠️ Detected maintenance page. Waiting 5 seconds and retrying...');
-                await delay(5000);
-                await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 });
-                await delay(3000);
-            }
-            // Try to click through to login naturally
-            console.log('Looking for sign-in link...');
-            const signInSelectors = [
-                'a[href*="login"]',
-                'a[href*="sign-in"]',
-                'a[href*="myaccount"]',
-                'button:has-text("Sign In")',
-                'a:has-text("Sign In")',
-                'a:has-text("Account")'
-            ];
-            let clickedSignIn = false;
-            for (const selector of signInSelectors) {
-                try {
-                    const link = await page.$(selector);
-                    if (link) {
-                        await link.click();
-                        clickedSignIn = true;
-                        console.log(`✅ Clicked sign-in link: ${selector}`);
-                        await delay(3000);
-                        break;
-                    }
-                }
-                catch (e) {
-                    // Try next selector
-                }
-            }
-            // If we couldn't click through, navigate directly to login
-            if (!clickedSignIn) {
-                console.log('Navigating directly to login page...');
-                await page.goto('https://www.ulta.com/u/login', {
-                    waitUntil: 'domcontentloaded',
-                    timeout: 30000
+        console.log('🔐 Launching visible browser for Ulta login...');
+        console.log(`   Session will be saved to: ${SESSION_DIR}`);
+        const browser = await puppeteer_1.default.launch({
+            headless: false, // VISIBLE so user can log in
+            userDataDir: SESSION_DIR,
+            args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--window-size=1280,900'
+            ],
+            defaultViewport: { width: 1280, height: 900 }
+        });
+        const page = await browser.newPage();
+        await page.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+        // Navigate to Ulta sign-in page
+        await page.goto('https://www.ulta.com/ulta/myaccount/login.jsp', {
+            waitUntil: 'networkidle2',
+            timeout: 30000
+        });
+        console.log('');
+        console.log('═══════════════════════════════════════════════════');
+        console.log('  🔐 ULTA LOGIN REQUIRED');
+        console.log('  A browser window has opened.');
+        console.log('  1. Log into your Ulta account');
+        console.log('  2. Complete any 2FA if prompted');
+        console.log('  3. Once you see the homepage, come back here');
+        console.log('  4. The session will be saved automatically');
+        console.log('═══════════════════════════════════════════════════');
+        console.log('');
+        console.log('⏳ Waiting for you to complete login...');
+        console.log('   (Press Ctrl+C when done, or wait 3 minutes)');
+        // Wait up to 3 minutes for user to log in
+        // We'll check for the "My Account" or signed-in indicator
+        const startTime = Date.now();
+        const TIMEOUT = 180000; // 3 minutes
+        while (Date.now() - startTime < TIMEOUT) {
+            try {
+                const loggedIn = await page.evaluate(() => {
+                    // Ulta shows "Hi, [Name]" or "Sign Out" when logged in
+                    const body = document.body?.innerText || '';
+                    return body.includes('Sign Out') || body.includes('My Account') || body.includes('Hi,');
                 });
-                await delay(3000);
-            }
-            console.log('');
-            console.log('═══════════════════════════════════════════════════');
-            console.log('  🔐 ULTA LOGIN REQUIRED');
-            console.log('  A Safari window has opened.');
-            console.log('  1. Log into your Ulta account');
-            console.log('  2. Complete any 2FA if prompted');
-            console.log('  3. Once you see the homepage or "My Account", come back here');
-            console.log('  4. The session will be saved automatically');
-            console.log('═══════════════════════════════════════════════════');
-            console.log('');
-            console.log('⏳ Waiting for you to complete login...');
-            console.log('   (Press Ctrl+C when done, or wait 3 minutes)');
-            // Wait up to 3 minutes for user to log in
-            const startTime = Date.now();
-            const TIMEOUT = 180000; // 3 minutes
-            while (Date.now() - startTime < TIMEOUT) {
-                try {
-                    const currentUrl = page.url();
-                    const pageInfo = await page.evaluate(() => {
-                        const body = (document.body?.innerText || '').toLowerCase();
-                        const title = (document.title || '').toLowerCase();
-                        return {
-                            hasSignOut: body.includes('sign out'),
-                            hasMyAccount: body.includes('my account') || body.includes('myaccount'),
-                            hasHi: body.includes('hi,') || body.includes('hi '),
-                            hasLogin: body.includes('sign in') || body.includes('log in') || title.includes('login') || title.includes('sign in'),
-                            hasOrderHistory: body.includes('order history'),
-                            hasMaintenance: body.includes('will be back shortly') ||
-                                body.includes('maintenance') ||
-                                body.includes('temporarily unavailable')
-                        };
-                    });
-                    // Check if stuck on maintenance page
-                    if (pageInfo.hasMaintenance) {
-                        console.log('⚠️ Still seeing maintenance page. You may need to manually navigate to login.');
-                    }
-                    // Check if logged in (multiple indicators)
-                    // URL check is strongest signal
-                    const isUrlLoggedIn = currentUrl.includes('/myaccount') ||
-                        (currentUrl.includes('/account') && !currentUrl.includes('/login'));
-                    const isTextLoggedIn = pageInfo.hasSignOut ||
-                        pageInfo.hasMyAccount ||
-                        pageInfo.hasHi ||
-                        pageInfo.hasOrderHistory;
-                    // Also check if still on login page
-                    const isOnLoginPage = currentUrl.includes('/login') ||
-                        currentUrl.includes('/u/login') ||
-                        (pageInfo.hasLogin && !isUrlLoggedIn);
-                    if ((isUrlLoggedIn || isTextLoggedIn) && !isOnLoginPage) {
-                        console.log('✅ Login detected! Stabilizing session...');
-                        // Wait for cookies to settle
-                        await delay(3000);
-                        // Verify session by navigating to account page
-                        try {
-                            console.log('   Verifying session persistence...');
-                            await page.goto('https://www.ulta.com/myaccount', { waitUntil: 'domcontentloaded', timeout: 15000 });
-                            await delay(2000);
-                            const currentUrlAfterNav = page.url();
-                            if (currentUrlAfterNav.includes('/login') || currentUrlAfterNav.includes('/u/login')) {
-                                console.log('⚠️ Session verification failed - redirected to login. Continuing to wait...');
-                                continue;
-                            }
-                        }
-                        catch (e) {
-                            console.log('⚠️ Verification navigation timed out, but assuming logged in.');
-                        }
-                        console.log(`✅ Session verified! Saving storage state...`);
-                        console.log(`   Final URL: ${page.url()}`);
-                        // Save storage state (cookies, localStorage, etc.)
-                        await context.storageState({ path: STORAGE_STATE_PATH });
-                        await browser.close();
-                        return { success: true, message: 'Session saved. Future orders will use this login.' };
-                    }
-                    // Debug logs every 10s
-                    const elapsed = Math.floor((Date.now() - startTime) / 1000);
-                    if (elapsed % 10 === 0 && elapsed > 0) {
-                        console.log(`   Waiting... (${elapsed}s) URL: ${currentUrl}`);
-                    }
+                if (loggedIn) {
+                    console.log('✅ Login detected! Session saved.');
+                    await browser.close();
+                    return { success: true, message: 'Session saved. Future orders will use this login.' };
                 }
-                catch (e) {
-                    // Page navigation in progress or other error
-                }
-                await delay(2000);
             }
-            await browser.close();
-            return { success: false, message: 'Timeout waiting for login. Try again.' };
+            catch { /* page navigation in progress */ }
+            await new Promise(r => setTimeout(r, 2000));
         }
-        catch (error) {
-            if (browser)
-                await browser.close();
-            return { success: false, message: `Setup failed: ${error}` };
-        }
+        await browser.close();
+        return { success: false, message: 'Timeout waiting for login. Try again.' };
     }
     // ─────────────────────────────────────────────────
     // CHECK: Is session still valid?
     // ─────────────────────────────────────────────────
     static async isSessionValid() {
-        if (!fs.existsSync(STORAGE_STATE_PATH))
+        if (!fs_1.default.existsSync(SESSION_DIR))
             return false;
         let browser = null;
         try {
-            browser = await playwright_1.webkit.launch({ headless: true });
-            const context = await browser.newContext({
-                storageState: STORAGE_STATE_PATH,
-                userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.2 Safari/605.1.15'
+            browser = await puppeteer_1.default.launch({
+                headless: true,
+                userDataDir: SESSION_DIR,
+                args: ['--no-sandbox', '--disable-setuid-sandbox']
             });
-            const page = await context.newPage();
+            const page = await browser.newPage();
+            await page.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
             await page.goto('https://www.ulta.com/ulta/myaccount/index.jsp', {
-                waitUntil: 'domcontentloaded',
+                waitUntil: 'networkidle2',
                 timeout: 20000
             });
             const loggedIn = await page.evaluate(() => {
@@ -281,8 +146,8 @@ class FulfillmentAgent {
                 error: 'No Ulta products in cart'
             };
         }
-        // Ensure session exists
-        if (!fs.existsSync(STORAGE_STATE_PATH)) {
+        // Ensure session directory exists
+        if (!fs_1.default.existsSync(SESSION_DIR)) {
             return {
                 success: false,
                 totalCost: 0,
@@ -294,20 +159,27 @@ class FulfillmentAgent {
         }
         let browser = null;
         try {
-            log('Launching Safari with saved session...');
-            browser = await playwright_1.webkit.launch({
+            log('Launching browser with saved session...');
+            browser = await puppeteer_1.default.launch({
                 headless: true,
+                userDataDir: SESSION_DIR,
+                args: [
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox',
+                    '--disable-blink-features=AutomationControlled'
+                ],
+                defaultViewport: { width: 1280, height: 900 }
             });
-            const context = await browser.newContext({
-                storageState: STORAGE_STATE_PATH,
-                viewport: { width: 1280, height: 900 },
-                userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.2 Safari/605.1.15'
+            const page = await browser.newPage();
+            await page.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+            // Stealth: remove webdriver flag
+            await page.evaluateOnNewDocument(() => {
+                Object.defineProperty(navigator, 'webdriver', { get: () => false });
             });
-            const page = await context.newPage();
             // ── Step 1: Verify we're logged in ──
             log('Checking login status...');
-            await page.goto('https://www.ulta.com', { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS });
-            await delay(UI_SETTLE_MS);
+            await page.goto('https://www.ulta.com', { waitUntil: 'networkidle2', timeout: 30000 });
+            await delay(2000);
             const isLoggedIn = await page.evaluate(() => {
                 const body = document.body?.innerText || '';
                 return body.includes('Sign Out') || body.includes('Hi,');
@@ -327,8 +199,8 @@ class FulfillmentAgent {
             log('✅ Logged into Ulta');
             // ── Step 2: Clear existing cart ──
             log('Clearing existing Ulta cart...');
-            await page.goto('https://www.ulta.com/bag', { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS });
-            await delay(UI_SETTLE_MS);
+            await page.goto('https://www.ulta.com/bag', { waitUntil: 'networkidle2', timeout: 30000 });
+            await delay(2000);
             // Try to remove all existing items
             let attempts = 0;
             while (attempts < 10) {
@@ -336,7 +208,7 @@ class FulfillmentAgent {
                 if (!removeBtn)
                     break;
                 await removeBtn.click();
-                await delay(700);
+                await delay(1500);
                 attempts++;
             }
             log('Cart cleared');
@@ -346,8 +218,8 @@ class FulfillmentAgent {
             for (const item of ultaItems) {
                 log(`Adding: ${item.name} (${item.brand}) x${item.quantity}`);
                 try {
-                    await page.goto(item.url, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS });
-                    await delay(UI_SETTLE_MS);
+                    await page.goto(item.url, { waitUntil: 'networkidle2', timeout: 30000 });
+                    await delay(2000);
                     // Check stock
                     const pageText = await page.evaluate(() => document.body?.innerText || '');
                     if (pageText.toLowerCase().includes('out of stock') || pageText.toLowerCase().includes('sold out')) {
@@ -359,7 +231,7 @@ class FulfillmentAgent {
                         const qtySelector = 'select[data-test="item-quantity"], select.js-quantity, select[name="quantity"]';
                         const qtySelect = await page.$(qtySelector);
                         if (qtySelect) {
-                            await page.selectOption(qtySelector, String(item.quantity));
+                            await page.select(qtySelector, String(item.quantity));
                             log(`  Set quantity to ${item.quantity}`);
                             await delay(500);
                         }
@@ -374,11 +246,20 @@ class FulfillmentAgent {
                         'button.js-add-to-bag',
                         'button.ProductHero__addToCart'
                     ];
-                    let clicked = await clickFirstEnabled(page, addSelectors);
-                    if (clicked) {
-                        log(`  ✅ Added to Ulta bag`);
-                        addedCount++;
-                        subtotal += item.price * item.quantity;
+                    let clicked = false;
+                    for (const sel of addSelectors) {
+                        const btn = await page.$(sel);
+                        if (btn) {
+                            const isDisabled = await page.evaluate(el => el.disabled, btn);
+                            if (!isDisabled) {
+                                await btn.click();
+                                clicked = true;
+                                log(`  ✅ Added to Ulta bag`);
+                                addedCount++;
+                                subtotal += item.price * item.quantity;
+                                break;
+                            }
+                        }
                     }
                     if (!clicked) {
                         // Fallback: try any button containing "Add to Bag" text
@@ -400,7 +281,7 @@ class FulfillmentAgent {
                             log(`  ❌ Could not find "Add to Bag" button for "${item.name}"`);
                         }
                     }
-                    await delay(1000); // Wait for bag update
+                    await delay(2000); // Wait for bag update
                 }
                 catch (err) {
                     log(`  ⚠️ Error adding "${item.name}": ${err}`);
@@ -420,8 +301,8 @@ class FulfillmentAgent {
             log(`${addedCount}/${ultaItems.length} items added to Ulta bag`);
             // ── Step 4: Navigate to checkout ──
             log('Navigating to checkout...');
-            await page.goto('https://www.ulta.com/bag', { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS });
-            await delay(UI_SETTLE_MS);
+            await page.goto('https://www.ulta.com/bag', { waitUntil: 'networkidle2', timeout: 30000 });
+            await delay(2000);
             // Click checkout button
             const checkoutSelectors = [
                 'button[data-test="checkout-button"]',
@@ -431,9 +312,16 @@ class FulfillmentAgent {
                 'a[href*="checkout"]',
                 'button[aria-label*="Checkout"]'
             ];
-            let checkoutClicked = await clickFirstEnabled(page, checkoutSelectors);
-            if (checkoutClicked)
-                log('  Proceeding to checkout...');
+            let checkoutClicked = false;
+            for (const sel of checkoutSelectors) {
+                const btn = await page.$(sel);
+                if (btn) {
+                    await btn.click();
+                    checkoutClicked = true;
+                    log('  Proceeding to checkout...');
+                    break;
+                }
+            }
             if (!checkoutClicked) {
                 // Fallback: click any element with "Checkout" text
                 await page.evaluate(() => {
@@ -445,8 +333,8 @@ class FulfillmentAgent {
                 });
                 log('  Proceeding to checkout (fallback)...');
             }
-            await delay(CHECKOUT_SETTLE_MS); // Wait for checkout page to load
-            await page.waitForLoadState('domcontentloaded', { timeout: 15000 }).catch(() => { });
+            await delay(5000); // Wait for checkout page to load
+            await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }).catch(() => { });
             // ── Step 5: Shipping address ──
             log('Handling shipping...');
             const addr = order.shippingAddress;
@@ -473,7 +361,7 @@ class FulfillmentAgent {
                         const field = await page.$(sel);
                         if (field) {
                             await field.click({ clickCount: 3 }); // Select all
-                            await field.fill(value);
+                            await field.type(value, { delay: 30 });
                             break;
                         }
                     }
@@ -483,19 +371,25 @@ class FulfillmentAgent {
                 for (const sel of stateSelectors[0].split(', ')) {
                     const stateField = await page.$(sel);
                     if (stateField) {
-                        await page.selectOption(sel, addr.state);
+                        await page.select(sel, addr.state);
                         break;
                     }
                 }
-                await delay(UI_SETTLE_MS);
+                await delay(1000);
                 // Click "Continue" or "Use this address"
                 const continueSelectors = [
                     'button[data-test="shipping-continue"]',
                     'button.js-continue-shipping',
                     'button[type="submit"]'
                 ];
-                await clickFirstEnabled(page, continueSelectors);
-                await delay(CHECKOUT_SETTLE_MS);
+                for (const sel of continueSelectors) {
+                    const btn = await page.$(sel);
+                    if (btn) {
+                        await btn.click();
+                        break;
+                    }
+                }
+                await delay(3000);
                 log('  ✅ Shipping address entered');
             }
             else {
@@ -503,7 +397,7 @@ class FulfillmentAgent {
             }
             // ── Step 6: Payment — use saved card ──
             log('Confirming payment method...');
-            await delay(UI_SETTLE_MS);
+            await delay(2000);
             const hasSavedPayment = await page.evaluate(() => {
                 const body = document.body?.innerText || '';
                 return body.includes('ending in') || body.includes('****') || body.includes('Visa') ||
@@ -524,7 +418,18 @@ class FulfillmentAgent {
                 'button[aria-label*="Place order"]',
                 '#place-order'
             ];
-            let orderPlaced = await clickFirstEnabled(page, placeOrderSelectors);
+            let orderPlaced = false;
+            for (const sel of placeOrderSelectors) {
+                const btn = await page.$(sel);
+                if (btn) {
+                    const isDisabled = await page.evaluate(el => el.disabled, btn);
+                    if (!isDisabled) {
+                        await btn.click();
+                        orderPlaced = true;
+                        break;
+                    }
+                }
+            }
             if (!orderPlaced) {
                 // Fallback: click any button with "Place Order" text
                 orderPlaced = await page.evaluate(() => {
@@ -539,10 +444,7 @@ class FulfillmentAgent {
             }
             if (orderPlaced) {
                 log('  ⏳ Waiting for order confirmation...');
-                await Promise.race([
-                    page.waitForURL(/order|confirmation|thank-you/i, { timeout: 8000 }).catch(() => null),
-                    delay(8000)
-                ]);
+                await delay(8000);
                 // Try to extract order confirmation number
                 const orderConfirmation = await page.evaluate(() => {
                     const body = document.body?.innerText || '';
@@ -577,7 +479,7 @@ class FulfillmentAgent {
             else {
                 log('⚠️ Could not click "Place Order" — checkout may require manual review');
                 // Take screenshot for debugging
-                const screenshotPath = path.resolve(__dirname, '../../checkout-debug.png');
+                const screenshotPath = path_1.default.resolve(__dirname, '../../checkout-debug.png');
                 await page.screenshot({ path: screenshotPath, fullPage: true });
                 log(`📸 Debug screenshot saved: ${screenshotPath}`);
                 await browser.close();
@@ -594,10 +496,10 @@ class FulfillmentAgent {
         catch (error) {
             if (browser) {
                 try {
-                    const pages = browser.contexts().flatMap(c => c.pages());
-                    if (pages.length > 0) {
-                        const screenshotPath = path.resolve(__dirname, '../../checkout-error.png');
-                        await pages[0].screenshot({ path: screenshotPath, fullPage: true });
+                    const page = (await browser.pages())[0];
+                    if (page) {
+                        const screenshotPath = path_1.default.resolve(__dirname, '../../checkout-error.png');
+                        await page.screenshot({ path: screenshotPath, fullPage: true });
                         log(`📸 Error screenshot saved: ${screenshotPath}`);
                     }
                 }
@@ -621,17 +523,4 @@ FulfillmentAgent.MARKUP_PERCENTAGE = 0.15; // 15% service fee
 FulfillmentAgent.FREE_SHIPPING_THRESHOLD = 35; // Ulta free shipping over $35
 function delay(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
-}
-async function clickFirstEnabled(page, selectors) {
-    for (const sel of selectors) {
-        const btn = await page.$(sel);
-        if (!btn)
-            continue;
-        const isDisabled = await page.evaluate(el => el.hasAttribute('disabled'), btn);
-        if (!isDisabled) {
-            await btn.click();
-            return true;
-        }
-    }
-    return false;
 }

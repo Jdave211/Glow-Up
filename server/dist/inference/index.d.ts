@@ -9,6 +9,11 @@ export interface UserProfileForInference {
     sunscreenUsage?: string;
     budget?: string;
     fragranceFree?: boolean;
+    detectedSkinTypeFromPhoto?: string;
+    photoAnalysisConfidence?: number;
+    imageHydrationScore?: number;
+    imageOilinessScore?: number;
+    imageTextureScore?: number;
 }
 export interface ProductMatch {
     id: string;

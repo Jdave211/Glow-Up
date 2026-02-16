@@ -239,8 +239,20 @@ class SupabaseService {
         
         let skinConcerns = profile.concerns.filter { skinConcernsList.contains($0) }
         let hairConcerns = profile.concerns.filter { hairConcernsList.contains($0) }
+
+        var parsedPhotos: [String: String] = [:]
+        for photoEntry in profile.photos {
+            guard let separator = photoEntry.firstIndex(of: ":") else { continue }
+            let slot = String(photoEntry[..<separator]).lowercased()
+            let valueStart = photoEntry.index(after: separator)
+            let payload = String(photoEntry[valueStart...]).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !payload.isEmpty else { continue }
+            if ["front", "left", "right", "scalp"].contains(slot) {
+                parsedPhotos[slot] = payload
+            }
+        }
         
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "userId": userId,
             "profile": [
                 "skinType": profile.skinType,
@@ -259,6 +271,10 @@ class SupabaseService {
                 "photoCheckIns": profile.photoCheckIns
             ]
         ]
+
+        if !parsedPhotos.isEmpty {
+            body["photos"] = parsedPhotos
+        }
         
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         
@@ -458,4 +474,3 @@ class SupabaseService {
         return response.success
     }
 }
-

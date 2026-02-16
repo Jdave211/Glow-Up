@@ -1,0 +1,28 @@
+# App surfaces not needed for backend dyno
+ios/
+mobile/
+server/mobile/
+.next/
+build/
+
+# Local/runtime artifacts
+node_modules/
+server/node_modules/
+server/.env
+.env
+.DS_Store
+
+# Large training and data files not needed by API runtime
+training.json
+training.jsonl
+training_prepared.jsonl
+skincare_finetune.jsonl
+product_embeds_finetune.jsonl
+extract-data-*.json
+scraped_products.json
+url.json
+recommendation_training.txt
+
+# Local keys/assets
+AuthKey_*.p8
+*.png

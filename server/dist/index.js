@@ -8,20 +8,47 @@ dotenv_1.default.config();
 const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
 const body_parser_1 = __importDefault(require("body-parser"));
-const stripe_1 = __importDefault(require("stripe"));
+const jwt = require('jsonwebtoken');
+const crypto_1 = require("crypto");
 const supabase_1 = require("./db/supabase");
-// Initialize Stripe
-const stripe = new stripe_1.default(process.env.STRIPE_SECRET_KEY || 'sk_test_placeholder');
 const apple_1 = require("./auth/apple");
 const inference_1 = require("./inference");
+if (process.env.NODE_ENV === 'production') {
+    const requiredEnv = [
+        'JWT_SECRET',
+        'ROUTINE_SHARE_SECRET',
+        'SUPABASE_URL'
+    ];
+    const missing = requiredEnv.filter(key => !process.env[key] || String(process.env[key]).trim().length === 0);
+    const hasSupabaseKey = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim().length > 0 ||
+        (process.env.SUPABASE_ANON_KEY || '').trim().length > 0;
+    if (!hasSupabaseKey) {
+        missing.push('SUPABASE_SERVICE_ROLE_KEY or SUPABASE_ANON_KEY');
+    }
+    if (missing.length > 0) {
+        console.error(`❌ Missing required env vars: ${missing.join(', ')}`);
+        process.exit(1);
+    }
+}
 const app = (0, express_1.default)();
 const port = process.env.PORT || 4000;
-app.use((0, cors_1.default)());
-app.use(body_parser_1.default.json({
-    verify: (req, res, buf) => {
-        req.rawBody = buf;
-    }
-}));
+app.set('trust proxy', 1);
+const configuredCorsOrigins = (process.env.GLOWUP_CORS_ORIGINS || '')
+    .split(',')
+    .map(origin => origin.trim())
+    .filter(Boolean);
+app.use((0, cors_1.default)(configuredCorsOrigins.length > 0 ? { origin: configuredCorsOrigins } : undefined));
+app.use(body_parser_1.default.json({ limit: process.env.GLOWUP_MAX_JSON_BODY || '20mb' }));
+app.get('/healthz', (_req, res) => {
+    res.status(200).json({
+        ok: true,
+        service: 'glowup-api',
+        uptime_seconds: Math.round(process.uptime()),
+        timestamp: new Date().toISOString(),
+        environment: process.env.NODE_ENV || 'development',
+        llm_available: (0, inference_1.isLLMAvailable)(),
+    });
+});
 // ─────────────────────────────────────────────────────────────────
 // AGENT 1: Skin Analysis Agent
 // ─────────────────────────────────────────────────────────────────
@@ -358,6 +385,35 @@ app.get('/', (req, res) => {
         agents: ['Skin Analysis', 'Hair Analysis', 'Product Matching', 'Budget Optimization']
     });
 });
+function deriveConcernSignalsFromImageAnalysis(imageAnalysis) {
+    if (!imageAnalysis?.skin)
+        return [];
+    const concerns = new Set();
+    const detected = Array.isArray(imageAnalysis.skin?.concerns_detected)
+        ? imageAnalysis.skin.concerns_detected.map((c) => String(c).toLowerCase())
+        : [];
+    for (const concern of detected) {
+        if (concern.includes('texture'))
+            concerns.add('texture');
+        if (concern.includes('oil'))
+            concerns.add('oiliness');
+        if (concern.includes('dry'))
+            concerns.add('dryness');
+        if (concern.includes('red'))
+            concerns.add('redness');
+        if (concern.includes('pigment') || concern.includes('dark'))
+            concerns.add('pigmentation');
+        if (concern.includes('acne') || concern.includes('breakout'))
+            concerns.add('acne');
+    }
+    const hydration = Number(imageAnalysis.skin?.hydration_score);
+    const oiliness = Number(imageAnalysis.skin?.oiliness_score);
+    if (!Number.isNaN(hydration) && hydration < 0.42)
+        concerns.add('dryness');
+    if (!Number.isNaN(oiliness) && oiliness > 0.62)
+        concerns.add('oiliness');
+    return Array.from(concerns);
+}
 // Main analysis endpoint - uses LLM inference with RAG
 // Now also accepts userId to auto-save the generated routine to DB
 app.post('/api/analyze', async (req, res) => {
@@ -370,17 +426,34 @@ app.post('/api/analyze', async (req, res) => {
         if (useLLM) {
             // New inference with RAG (LLM if available, fallback otherwise)
             console.log(`🧠 Using inference engine... (LLM: ${(0, inference_1.isLLMAvailable)() ? 'enabled' : 'fallback mode'})`);
+            const savedSkinProfile = userId ? await supabase_1.DatabaseService.getSkinProfileByUserId(userId) : null;
+            const profileConcerns = Array.isArray(profile.concerns) ? profile.concerns : [];
+            const imageSignalConcerns = deriveConcernSignalsFromImageAnalysis(savedSkinProfile?.image_analysis);
+            const mergedConcerns = Array.from(new Set([...profileConcerns, ...imageSignalConcerns]));
+            const photoSkinType = String(savedSkinProfile?.image_analysis?.skin?.detected_type || '').toLowerCase();
+            const photoConfidence = Number(savedSkinProfile?.image_analysis?.confidence_scores?.skin_analysis || 0);
+            const resolvedSkinType = (photoSkinType && photoConfidence >= 0.7)
+                ? photoSkinType
+                : profile.skinType;
+            const hydrationScore = Number(savedSkinProfile?.image_analysis?.skin?.hydration_score);
+            const oilinessScore = Number(savedSkinProfile?.image_analysis?.skin?.oiliness_score);
+            const textureScore = Number(savedSkinProfile?.image_analysis?.skin?.texture_score);
             const inferenceProfile = {
-                skinType: profile.skinType,
+                skinType: resolvedSkinType,
                 skinTone: profile.skinTone,
                 skinGoals: profile.skinGoals,
-                skinConcerns: profile.concerns?.filter((c) => ['acne', 'aging', 'dryness', 'oiliness', 'pigmentation', 'sensitivity', 'redness', 'texture', 'dark_spots'].includes(c)),
+                skinConcerns: mergedConcerns.filter((c) => ['acne', 'aging', 'dryness', 'oiliness', 'pigmentation', 'sensitivity', 'redness', 'texture', 'dark_spots'].includes(c)),
                 hairType: profile.hairType,
-                hairConcerns: profile.concerns?.filter((c) => ['frizz', 'damage', 'breakage', 'oily_scalp', 'dry_scalp', 'thinning', 'color_damage', 'heat_damage'].includes(c)),
+                hairConcerns: mergedConcerns.filter((c) => ['frizz', 'damage', 'breakage', 'oily_scalp', 'dry_scalp', 'thinning', 'color_damage', 'heat_damage'].includes(c)),
                 washFrequency: profile.washFrequency,
                 sunscreenUsage: profile.sunscreenUsage,
                 budget: profile.budget,
-                fragranceFree: profile.fragranceFree
+                fragranceFree: profile.fragranceFree,
+                detectedSkinTypeFromPhoto: photoSkinType || undefined,
+                photoAnalysisConfidence: photoConfidence || undefined,
+                imageHydrationScore: Number.isFinite(hydrationScore) ? hydrationScore : undefined,
+                imageOilinessScore: Number.isFinite(oilinessScore) ? oilinessScore : undefined,
+                imageTextureScore: Number.isFinite(textureScore) ? textureScore : undefined,
             };
             const inferenceResult = await (0, inference_1.runInference)(inferenceProfile);
             // ── Auto-save the product-enriched routine for this user ──
@@ -689,78 +762,52 @@ app.post('/api/orders', async (req, res) => {
         });
         latestOrderByUser.set(userId, pendingOrderId);
         pushTrackingEvent(pendingOrderId, 'agent_processing', 'Ulta agent is adding products and proceeding through checkout.');
-        // Trigger Fulfillment Agent in BACKGROUND
-        // Don't await this, so the client gets an immediate response
-        fulfillment_1.FulfillmentAgent.processOrder({
+        // Trigger Fulfillment Agent
+        const result = await fulfillment_1.FulfillmentAgent.processOrder({
             userId,
             items,
             shippingAddress
-        }).then(result => {
-            if (result.success) {
-                console.log(`✅ Order placed: ${result.orderId}`);
-                const finalOrderId = result.orderId || pendingOrderId;
-                // Move tracking record to real order id when available
-                const existing = orderTrackingStore.get(pendingOrderId);
-                const nowIso = new Date().toISOString();
-                const estimatedDelivery = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString();
-                if (existing) {
-                    const nextRecord = {
-                        orderId: finalOrderId,
-                        userId,
-                        retailer: 'ulta',
-                        status: 'confirmed',
-                        trackingUrl: baseTrackingUrl,
-                        estimatedDelivery,
-                        events: [
-                            ...(existing.events || []),
-                            { status: 'placed', message: 'Order placed on Ulta checkout.', at: nowIso },
-                            { status: 'confirmed', message: `Ulta confirmed order ${finalOrderId}.`, at: nowIso },
-                        ],
-                        updatedAt: nowIso,
-                    };
-                    // Store under both IDs to ensure tracking works
-                    orderTrackingStore.set(pendingOrderId, nextRecord);
-                    if (finalOrderId !== pendingOrderId) {
-                        orderTrackingStore.set(finalOrderId, nextRecord);
-                        latestOrderByUser.set(userId, finalOrderId);
-                    }
-                }
-            }
-            else {
-                console.log(`❌ Order failed: ${result.error}`);
-                const existing = orderTrackingStore.get(pendingOrderId);
-                if (existing) {
-                    existing.status = 'failed';
-                    existing.updatedAt = new Date().toISOString();
-                    existing.events.push({
-                        status: 'failed',
-                        message: result.error || 'Agent checkout failed.',
-                        at: new Date().toISOString()
-                    });
-                }
-            }
-        }).catch(err => {
-            console.error('💥 Unhandled agent error:', err);
+        });
+        if (result.success) {
+            console.log(`✅ Order placed: ${result.orderId}`);
+            const finalOrderId = result.orderId || pendingOrderId;
+            // Move tracking record to real order id when available
             const existing = orderTrackingStore.get(pendingOrderId);
-            if (existing) {
-                existing.status = 'failed';
-                existing.events.push({
-                    status: 'failed',
-                    message: 'Internal agent error.',
-                    at: new Date().toISOString()
-                });
-            }
-        });
-        // Return immediate pending response
-        res.json({
-            success: true,
-            orderId: pendingOrderId,
-            tracking: {
-                status: 'queued',
+            const nowIso = new Date().toISOString();
+            const estimatedDelivery = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString();
+            const nextRecord = {
+                orderId: finalOrderId,
+                userId,
+                retailer: 'ulta',
+                status: 'confirmed',
                 trackingUrl: baseTrackingUrl,
-                estimatedDelivery: null
-            }
-        });
+                estimatedDelivery,
+                events: [
+                    ...(existing?.events || []),
+                    { status: 'placed', message: 'Order placed on Ulta checkout.', at: nowIso },
+                    { status: 'confirmed', message: `Ulta confirmed order ${finalOrderId}.`, at: nowIso },
+                ],
+                updatedAt: nowIso,
+            };
+            orderTrackingStore.delete(pendingOrderId);
+            orderTrackingStore.set(finalOrderId, nextRecord);
+            latestOrderByUser.set(userId, finalOrderId);
+            res.json({
+                success: true,
+                orderId: finalOrderId,
+                tracking: {
+                    status: nextRecord.status,
+                    trackingUrl: nextRecord.trackingUrl,
+                    estimatedDelivery: nextRecord.estimatedDelivery,
+                },
+                result,
+            });
+        }
+        else {
+            console.log(`❌ Order failed: ${result.error}`);
+            pushTrackingEvent(pendingOrderId, 'failed', result.error || 'Checkout failed before confirmation.');
+            res.status(500).json({ success: false, error: result.error, logs: result.logs });
+        }
     }
     catch (error) {
         console.error('Order Error:', error);
@@ -809,6 +856,452 @@ app.get('/api/routines/:userId', async (req, res) => {
     catch (error) {
         console.error('Error:', error);
         res.status(500).json({ error: 'Server error' });
+    }
+});
+function getRoutineObjectFromData(routineData) {
+    if (!routineData)
+        return null;
+    return routineData?.inference?.routine || routineData?.routine || routineData?.summary?.routine || null;
+}
+function routineHasLinkedProducts(routineData) {
+    const routine = getRoutineObjectFromData(routineData);
+    if (!routine)
+        return false;
+    const allSteps = [
+        ...(routine.morning || []),
+        ...(routine.evening || []),
+        ...(routine.weekly || []),
+    ];
+    return allSteps.some((s) => Boolean(s?.product?.id || s?.product_id));
+}
+function mapDbProfileToInference(profile) {
+    const profileSkinConcerns = Array.isArray(profile?.skin_concerns) ? profile.skin_concerns : [];
+    const imageSignalConcerns = deriveConcernSignalsFromImageAnalysis(profile?.image_analysis);
+    const mergedSkinConcerns = Array.from(new Set([...profileSkinConcerns, ...imageSignalConcerns]))
+        .map((c) => String(c).toLowerCase().replace(/\s+/g, '_'));
+    const hairConcerns = (Array.isArray(profile?.hair_concerns) ? profile.hair_concerns : [])
+        .map((c) => String(c).toLowerCase().replace(/\s+/g, '_'));
+    const photoSkinType = String(profile?.image_analysis?.skin?.detected_type || '').toLowerCase();
+    const photoConfidence = Number(profile?.image_analysis?.confidence_scores?.skin_analysis || 0);
+    const resolvedSkinType = (photoSkinType && photoConfidence >= 0.7)
+        ? photoSkinType
+        : (profile?.skin_type || 'normal');
+    const hydrationScore = Number(profile?.image_analysis?.skin?.hydration_score);
+    const oilinessScore = Number(profile?.image_analysis?.skin?.oiliness_score);
+    const textureScore = Number(profile?.image_analysis?.skin?.texture_score);
+    return {
+        skinType: resolvedSkinType,
+        skinTone: profile?.skin_tone,
+        skinGoals: Array.isArray(profile?.skin_goals) ? profile.skin_goals : [],
+        skinConcerns: mergedSkinConcerns.filter((c) => ['acne', 'aging', 'dryness', 'oiliness', 'pigmentation', 'sensitivity', 'redness', 'texture', 'dark_spots'].includes(c)),
+        hairType: profile?.hair_type || undefined,
+        hairConcerns: hairConcerns.filter((c) => ['frizz', 'damage', 'breakage', 'oily_scalp', 'dry_scalp', 'thinning', 'color_damage', 'heat_damage'].includes(c)),
+        washFrequency: profile?.wash_frequency || undefined,
+        sunscreenUsage: profile?.sunscreen_usage || undefined,
+        budget: profile?.budget || 'medium',
+        fragranceFree: !!profile?.fragrance_free,
+        detectedSkinTypeFromPhoto: photoSkinType || undefined,
+        photoAnalysisConfidence: photoConfidence || undefined,
+        imageHydrationScore: Number.isFinite(hydrationScore) ? hydrationScore : undefined,
+        imageOilinessScore: Number.isFinite(oilinessScore) ? oilinessScore : undefined,
+        imageTextureScore: Number.isFinite(textureScore) ? textureScore : undefined,
+    };
+}
+async function ensureUserHasProductRoutine(userId, profile, latestRoutineRow) {
+    if (latestRoutineRow?.routine_data && routineHasLinkedProducts(latestRoutineRow.routine_data)) {
+        return latestRoutineRow;
+    }
+    try {
+        console.log(`🧴 No product-linked routine found for ${userId}. Generating one from inference...`);
+        const inferenceProfile = mapDbProfileToInference(profile);
+        const inferred = await withTimeout((0, inference_1.runInference)(inferenceProfile), 22000, null);
+        if (!inferred)
+            return latestRoutineRow;
+        const profileId = profile?.id || userId;
+        const saved = await supabase_1.DatabaseService.saveRoutine(userId, profileId, {
+            inference: {
+                routine: inferred.routine,
+                summary: inferred.summary,
+                personalized_tips: inferred.personalized_tips,
+            },
+        });
+        if (!saved)
+            return latestRoutineRow;
+        const refreshed = await supabase_1.DatabaseService.getLatestRoutine(userId);
+        if (refreshed?.routine_data && routineHasLinkedProducts(refreshed.routine_data)) {
+            console.log(`✅ Product-linked routine generated for ${userId}`);
+            return refreshed;
+        }
+    }
+    catch (err) {
+        console.log(`⚠️ Failed to auto-generate product routine for ${userId}:`, err?.message);
+    }
+    return latestRoutineRow;
+}
+async function searchProductsForRoutineEditor(query, userId, category, limit = 8) {
+    const cappedLimit = Math.max(1, Math.min(limit, 20));
+    const safeQuery = String(query || '').trim();
+    const normalizedCategory = category ? String(category).toLowerCase() : undefined;
+    const results = [];
+    let profile = null;
+    if (userId) {
+        profile = await supabase_1.DatabaseService.getSkinProfileByUserId(userId);
+    }
+    if (openaiChat && safeQuery.length > 0) {
+        try {
+            const embeddingRes = await openaiChat.embeddings.create({
+                model: 'text-embedding-3-small',
+                input: safeQuery,
+            });
+            const queryEmbedding = embeddingRes.data[0].embedding;
+            const { data: vectorResults } = await supabase_1.supabase.rpc('match_products', {
+                query_embedding: queryEmbedding,
+                match_threshold: 0.22,
+                match_count: cappedLimit * 4,
+            });
+            if (vectorResults && vectorResults.length > 0) {
+                results.push(...vectorResults);
+            }
+        }
+        catch { }
+    }
+    const qTerm = safeQuery.replace(/[,%]/g, ' ').trim();
+    let dbQuery = supabase_1.supabase
+        .from('products')
+        .select('id, name, brand, price, category, summary, description, image_url, rating, buy_link, target_skin_type, target_concerns')
+        .order('rating', { ascending: false })
+        .limit(cappedLimit * 4);
+    if (normalizedCategory)
+        dbQuery = dbQuery.eq('category', normalizedCategory);
+    if (qTerm.length > 0) {
+        dbQuery = dbQuery.or(`name.ilike.%${qTerm}%,brand.ilike.%${qTerm}%,summary.ilike.%${qTerm}%`);
+    }
+    const { data: keywordResults } = await dbQuery;
+    if (keywordResults?.length) {
+        results.push(...keywordResults);
+    }
+    if (results.length < cappedLimit && qTerm.length > 0) {
+        const tsQuery = qTerm.split(/\s+/).filter(Boolean).join(' | ');
+        if (tsQuery.length > 0) {
+            const { data: textResults } = await supabase_1.supabase
+                .from('products')
+                .select('id, name, brand, price, category, summary, description, image_url, rating, buy_link, target_skin_type, target_concerns')
+                .textSearch('search_vector', tsQuery)
+                .order('rating', { ascending: false })
+                .limit(cappedLimit * 3);
+            if (textResults?.length)
+                results.push(...textResults);
+        }
+    }
+    const seen = new Set();
+    let deduped = results.filter((p) => {
+        const id = p?.id;
+        if (!id || seen.has(id))
+            return false;
+        seen.add(id);
+        return true;
+    });
+    if (normalizedCategory) {
+        deduped = deduped.filter((p) => String(p.category || '').toLowerCase() === normalizedCategory);
+    }
+    if (profile?.skin_type) {
+        const preferred = deduped.filter((p) => {
+            const types = Array.isArray(p.target_skin_type) ? p.target_skin_type.map((t) => t.toLowerCase()) : [];
+            return types.includes(profile.skin_type) || types.includes('all');
+        });
+        if (preferred.length >= Math.min(3, cappedLimit)) {
+            deduped = [...preferred, ...deduped.filter((p) => !preferred.find((pp) => pp.id === p.id))];
+        }
+    }
+    deduped.sort((a, b) => {
+        const simA = Number(a.similarity || 0);
+        const simB = Number(b.similarity || 0);
+        if (simA !== simB)
+            return simB - simA;
+        return Number(b.rating || 0) - Number(a.rating || 0);
+    });
+    return deduped.slice(0, cappedLimit).map((p) => ({
+        id: p.id,
+        name: p.name,
+        brand: p.brand,
+        price: Number(p.price || 0),
+        category: p.category,
+        description: p.summary || p.description || '',
+        image_url: p.image_url || null,
+        rating: p.rating || null,
+        buy_link: p.buy_link || null,
+    }));
+}
+app.post('/api/routine/search-products', async (req, res) => {
+    try {
+        const { userId, query, category, limit } = req.body || {};
+        const normalizedQuery = String(query || '').trim();
+        if (!normalizedQuery) {
+            return res.status(400).json({ error: 'query is required' });
+        }
+        const products = await searchProductsForRoutineEditor(normalizedQuery, userId, category, Number(limit || 8));
+        res.json({ success: true, products });
+    }
+    catch (error) {
+        console.error('Routine search error:', error?.message);
+        res.status(500).json({ error: 'Failed to search routine products' });
+    }
+});
+app.post('/api/routine/update', async (req, res) => {
+    try {
+        const { userId, routine, summary } = req.body || {};
+        if (!userId || !routine) {
+            return res.status(400).json({ error: 'userId and routine are required' });
+        }
+        const profile = await supabase_1.DatabaseService.getSkinProfileByUserId(userId);
+        if (!profile) {
+            return res.status(404).json({ error: 'Skin profile not found' });
+        }
+        const resolveProduct = async (step) => {
+            if (step?.product_id) {
+                const { data } = await supabase_1.supabase
+                    .from('products')
+                    .select('id, name, brand, price, category, image_url, buy_link, rating, summary, description')
+                    .eq('id', step.product_id)
+                    .limit(1);
+                if (data && data[0])
+                    return data[0];
+            }
+            if (step?.product_name) {
+                const q = String(step.product_name).trim().replace(/[,%]/g, ' ');
+                if (q.length > 0) {
+                    const { data } = await supabase_1.supabase
+                        .from('products')
+                        .select('id, name, brand, price, category, image_url, buy_link, rating, summary, description')
+                        .or(`name.ilike.%${q}%,brand.ilike.%${q}%`)
+                        .order('rating', { ascending: false })
+                        .limit(1);
+                    if (data && data[0])
+                        return data[0];
+                }
+            }
+            return null;
+        };
+        const normalizeSteps = async (steps, routineType) => {
+            const input = Array.isArray(steps) ? steps : [];
+            const normalized = await Promise.all(input.map(async (s, idx) => {
+                const resolvedProduct = await resolveProduct(s);
+                return {
+                    step: Number(s?.step || idx + 1),
+                    name: String(s?.name || `Step ${idx + 1}`),
+                    instructions: String(s?.instructions || s?.tip || ''),
+                    frequency: String(s?.frequency || (routineType === 'weekly' ? 'weekly' : 'daily')),
+                    product: resolvedProduct ? {
+                        id: resolvedProduct.id,
+                        name: resolvedProduct.name,
+                        brand: resolvedProduct.brand,
+                        price: resolvedProduct.price,
+                        category: resolvedProduct.category,
+                        image_url: resolvedProduct.image_url,
+                        buy_link: resolvedProduct.buy_link,
+                        rating: resolvedProduct.rating || 4.0,
+                        description: resolvedProduct.summary || resolvedProduct.description || '',
+                    } : undefined,
+                };
+            }));
+            return normalized
+                .sort((a, b) => Number(a.step) - Number(b.step))
+                .map((s, idx) => ({ ...s, step: idx + 1 }));
+        };
+        const [morning, evening, weekly] = await Promise.all([
+            normalizeSteps(routine.morning || [], 'morning'),
+            normalizeSteps(routine.evening || [], 'evening'),
+            normalizeSteps(routine.weekly || [], 'weekly'),
+        ]);
+        const payload = {
+            inference: {
+                routine: { morning, evening, weekly },
+                summary: summary || 'Routine updated by user',
+                personalized_tips: [],
+            },
+        };
+        const saved = await supabase_1.DatabaseService.saveRoutine(userId, profile.id, payload);
+        if (!saved) {
+            return res.status(500).json({ error: 'Failed to save routine' });
+        }
+        res.json({ success: true, routine_id: saved.id, routine: payload.inference.routine });
+    }
+    catch (error) {
+        console.error('Routine update error:', error?.message);
+        res.status(500).json({ error: 'Failed to update routine' });
+    }
+});
+const ROUTINE_SHARE_SECRET = process.env.ROUTINE_SHARE_SECRET || process.env.JWT_SECRET || 'glowup-routine-share-dev-secret';
+const APP_STORE_URL = process.env.GLOWUP_APP_STORE_URL || 'https://apps.apple.com/us/search?term=GlowUp';
+function normalizeShareStep(step, fallbackIndex) {
+    return {
+        step: Number(step?.step || fallbackIndex + 1),
+        name: String(step?.name || `Step ${fallbackIndex + 1}`),
+        instructions: String(step?.instructions || step?.tip || ''),
+        frequency: String(step?.frequency || 'daily'),
+        product_id: step?.product?.id || step?.product_id || null,
+        product_name: step?.product?.name || step?.product_name || null,
+        product_brand: step?.product?.brand || step?.product_brand || null,
+        product_price: step?.product?.price || step?.product_price || null,
+    };
+}
+function buildRoutineSharePayload(routineData, routineType) {
+    const routine = getRoutineObjectFromData(routineData) || { morning: [], evening: [], weekly: [] };
+    const morning = (routine?.morning || []).map(normalizeShareStep);
+    const evening = (routine?.evening || []).map(normalizeShareStep);
+    const weekly = (routine?.weekly || []).map(normalizeShareStep);
+    if (routineType === 'morning')
+        return { morning, evening: [], weekly: [] };
+    if (routineType === 'evening')
+        return { morning: [], evening, weekly: [] };
+    if (routineType === 'weekly')
+        return { morning: [], evening: [], weekly };
+    return { morning, evening, weekly };
+}
+function escapeHtml(input) {
+    return input
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+function renderRoutineSectionHtml(title, steps) {
+    if (!steps || steps.length === 0)
+        return '';
+    const rows = steps.map((step) => {
+        const productLine = step.product_name
+            ? `<div class="product">${escapeHtml(step.product_brand || '')}${step.product_brand ? ' • ' : ''}${escapeHtml(step.product_name)}</div>`
+            : '';
+        const idLine = step.product_id
+            ? `<div class="pid">ID ${escapeHtml(String(step.product_id))}</div>`
+            : '';
+        const instructionLine = step.instructions
+            ? `<div class="instructions">${escapeHtml(step.instructions)}</div>`
+            : '';
+        return `
+      <div class="step-card">
+        <div class="step-top">
+          <span class="step-chip">Step ${step.step}</span>
+          <span class="step-name">${escapeHtml(step.name)}</span>
+        </div>
+        ${productLine}
+        ${idLine}
+        ${instructionLine}
+      </div>
+    `;
+    }).join('');
+    return `
+    <section class="section">
+      <h2>${escapeHtml(title)}</h2>
+      <div class="steps">${rows}</div>
+    </section>
+  `;
+}
+app.post('/api/routine/share', async (req, res) => {
+    try {
+        const { userId, routineType } = req.body || {};
+        const selectedType = (['morning', 'evening', 'weekly'].includes(String(routineType)))
+            ? String(routineType)
+            : 'all';
+        if (!userId) {
+            return res.status(400).json({ error: 'userId is required' });
+        }
+        const profile = await supabase_1.DatabaseService.getSkinProfileByUserId(userId);
+        if (!profile)
+            return res.status(404).json({ error: 'Profile not found' });
+        const latestRoutine = await supabase_1.DatabaseService.getLatestRoutine(userId);
+        const ensuredRoutine = await ensureUserHasProductRoutine(userId, profile, latestRoutine);
+        if (!ensuredRoutine?.routine_data) {
+            return res.status(404).json({ error: 'No routine found' });
+        }
+        const routinePayload = buildRoutineSharePayload(ensuredRoutine.routine_data, selectedType);
+        const tokenPayload = {
+            userId,
+            routineType: selectedType,
+            routine: routinePayload,
+            issuedAt: new Date().toISOString(),
+        };
+        const token = jwt.sign(tokenPayload, ROUTINE_SHARE_SECRET, { expiresIn: '30d' });
+        const baseUrl = process.env.GLOWUP_SHARE_BASE_URL || `${req.protocol}://${req.get('host')}`;
+        const shareUrl = `${baseUrl}/share/routine/${encodeURIComponent(token)}`;
+        const appDeepLink = `glowup://routine/shared?token=${encodeURIComponent(token)}`;
+        res.json({
+            success: true,
+            share_url: shareUrl,
+            app_deep_link: appDeepLink,
+            routine_type: selectedType,
+        });
+    }
+    catch (error) {
+        console.error('Routine share error:', error?.message);
+        res.status(500).json({ error: 'Failed to create routine share link' });
+    }
+});
+app.get('/share/routine/:token', async (req, res) => {
+    try {
+        const decoded = jwt.verify(req.params.token, ROUTINE_SHARE_SECRET);
+        const routine = decoded?.routine || { morning: [], evening: [], weekly: [] };
+        const deepLink = `glowup://routine/shared?token=${encodeURIComponent(req.params.token)}`;
+        const morningHtml = renderRoutineSectionHtml('Morning Glow', routine.morning || []);
+        const eveningHtml = renderRoutineSectionHtml('Evening Repair', routine.evening || []);
+        const weeklyHtml = renderRoutineSectionHtml('Weekly Reset', routine.weekly || []);
+        const html = `
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Shared GlowUp Routine</title>
+  <style>
+    :root { --pink:#ff6b9d; --rose:#ff8aaf; --ink:#232323; --muted:#6f6f6f; --bg1:#fff5fa; --bg2:#ffe8f1; }
+    *{box-sizing:border-box}
+    body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",sans-serif;background:linear-gradient(180deg,var(--bg1),var(--bg2));color:var(--ink)}
+    .wrap{max-width:840px;margin:0 auto;padding:28px 16px 40px}
+    .hero{background:#fff;border:1px solid #ffd9e7;border-radius:22px;padding:22px;box-shadow:0 8px 26px rgba(255,107,157,.12)}
+    .badge{display:inline-block;padding:6px 10px;border-radius:999px;background:#ffe6ef;color:#a84a6d;font-size:12px;font-weight:700;letter-spacing:.4px;text-transform:uppercase}
+    h1{margin:12px 0 8px;font-size:32px;line-height:1.05;font-family:"Didot","Times New Roman",serif}
+    .sub{margin:0;color:var(--muted);font-size:14px}
+    .actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px}
+    .btn{display:inline-flex;align-items:center;justify-content:center;padding:11px 14px;border-radius:12px;font-size:14px;font-weight:700;text-decoration:none}
+    .btn-primary{background:linear-gradient(90deg,var(--pink),var(--rose));color:#fff}
+    .btn-secondary{background:#f8f8f8;color:#444;border:1px solid #e9e9e9}
+    .section{margin-top:18px;background:#fff;border:1px solid #f3d9e3;border-radius:18px;padding:16px}
+    .section h2{margin:0 0 12px;font-size:18px}
+    .steps{display:grid;gap:10px}
+    .step-card{background:#fff8fb;border:1px solid #ffe0ec;border-radius:12px;padding:12px}
+    .step-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+    .step-chip{font-size:11px;font-weight:700;padding:4px 8px;border-radius:999px;background:#ffe4ef;color:#c74f7f}
+    .step-name{font-size:15px;font-weight:700}
+    .product{margin-top:8px;font-size:13px;color:#4d4d4d}
+    .pid{margin-top:4px;font-size:11px;color:#949494;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;word-break:break-all}
+    .instructions{margin-top:7px;font-size:13px;color:#666;line-height:1.35}
+    .foot{margin-top:16px;text-align:center;color:#848484;font-size:12px}
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <section class="hero">
+      <span class="badge">Shared from GlowUp</span>
+      <h1>Skincare Routine</h1>
+      <p class="sub">Open in GlowUp to personalize, track streaks, and shop your exact routine.</p>
+      <div class="actions">
+        <a class="btn btn-primary" href="${deepLink}">Open in GlowUp App</a>
+        <a class="btn btn-secondary" href="${APP_STORE_URL}">Get GlowUp</a>
+      </div>
+    </section>
+    ${morningHtml}
+    ${eveningHtml}
+    ${weeklyHtml}
+    <p class="foot">Shared routine links expire in 30 days for privacy.</p>
+  </main>
+</body>
+</html>`;
+        res.setHeader('Content-Type', 'text/html; charset=utf-8');
+        res.send(html);
+    }
+    catch (error) {
+        res.status(400).send('Invalid or expired routine share link.');
     }
 });
 // Get all products
@@ -1228,45 +1721,469 @@ If the product fits both morning and evening (like a cleanser), respond with an 
         res.status(500).json({ error: 'Server error' });
     }
 });
-// ═══════════════════════════════════════════════════════════════
-// SKIN PROFILE ENDPOINTS
-// ═══════════════════════════════════════════════════════════════
-// Mock image analysis function (replace with real AI later)
-async function analyzeImages(photos) {
-    // Simulate processing time
-    await new Promise(resolve => setTimeout(resolve, 500));
-    // Mock analysis results - In production, this would call a vision AI model
-    const hasPhotos = photos.front || photos.left || photos.right;
-    if (!hasPhotos) {
+const PHOTO_BUCKET = process.env.GLOWUP_PRIVATE_PHOTO_BUCKET || 'glowup-private-photos';
+const PHOTO_SIGNED_URL_TTL_SECONDS = Number(process.env.GLOWUP_PHOTO_SIGNED_URL_TTL_SECONDS || '3600');
+const PHOTO_MAX_BYTES = Number(process.env.GLOWUP_PHOTO_MAX_BYTES || `${6 * 1024 * 1024}`);
+const PHOTO_RETENTION_DAYS = Number(process.env.GLOWUP_PHOTO_RETENTION_DAYS || '90');
+function hasAnyPhotos(photos) {
+    return !!(photos?.front || photos?.left || photos?.right || photos?.scalp);
+}
+function sanitizePathToken(input) {
+    return input.replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+function parseDataImage(imageValue) {
+    const match = imageValue.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+    if (!match)
+        return null;
+    const contentType = match[1].toLowerCase();
+    const base64Payload = match[2];
+    const buffer = Buffer.from(base64Payload, 'base64');
+    if (!buffer.length || buffer.length > PHOTO_MAX_BYTES)
+        return null;
+    const extByType = {
+        'image/jpeg': 'jpg',
+        'image/jpg': 'jpg',
+        'image/png': 'png',
+        'image/webp': 'webp',
+        'image/heic': 'heic',
+        'image/heif': 'heif',
+    };
+    return {
+        buffer,
+        contentType,
+        extension: extByType[contentType] || 'jpg',
+    };
+}
+async function uploadPhotoReference(userId, slot, value, context = 'onboarding') {
+    if (!value || typeof value !== 'string')
+        return {};
+    const trimmed = value.trim();
+    if (!trimmed)
+        return {};
+    // Backward compatibility for already-hosted URLs/paths.
+    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+        return { ref: trimmed };
+    }
+    if (!trimmed.startsWith('data:')) {
+        return { ref: trimmed };
+    }
+    const parsed = parseDataImage(trimmed);
+    if (!parsed) {
+        console.warn(`⚠️ Skipping invalid image payload for ${slot}`);
+        return {};
+    }
+    const userPath = sanitizePathToken(userId);
+    const dateFolder = new Date().toISOString().slice(0, 10);
+    const filename = `${slot}-${Date.now()}-${(0, crypto_1.randomUUID)().slice(0, 8)}.${parsed.extension}`;
+    const path = `${userPath}/${context}/${dateFolder}/${filename}`;
+    const { error } = await supabase_1.supabase.storage
+        .from(PHOTO_BUCKET)
+        .upload(path, parsed.buffer, {
+        contentType: parsed.contentType,
+        upsert: false,
+    });
+    if (error) {
+        console.error(`❌ Photo upload failed for ${slot}:`, error.message);
+        return {};
+    }
+    return { ref: path, uploadedPath: path };
+}
+async function persistIncomingPhotos(userId, photos, context = 'onboarding') {
+    const stored = {};
+    const uploadedPaths = [];
+    const slots = ['front', 'left', 'right', 'scalp'];
+    for (const slot of slots) {
+        const { ref, uploadedPath } = await uploadPhotoReference(userId, slot, photos?.[slot], context);
+        if (ref)
+            stored[slot] = ref;
+        if (uploadedPath)
+            uploadedPaths.push(uploadedPath);
+    }
+    return { stored, uploadedPaths };
+}
+async function removePrivatePhotoPaths(paths) {
+    if (!paths.length)
+        return;
+    const { error } = await supabase_1.supabase.storage.from(PHOTO_BUCKET).remove(paths);
+    if (error) {
+        console.error('⚠️ Failed to remove private photo paths:', error.message);
+    }
+}
+function isStoragePathRef(ref) {
+    if (!ref)
+        return false;
+    return !ref.startsWith('http://') && !ref.startsWith('https://') && !ref.startsWith('data:');
+}
+async function toSignedPhotoUrl(ref) {
+    if (!ref)
+        return ref;
+    if (ref.startsWith('http://') || ref.startsWith('https://'))
+        return ref;
+    const { data, error } = await supabase_1.supabase.storage
+        .from(PHOTO_BUCKET)
+        .createSignedUrl(ref, PHOTO_SIGNED_URL_TTL_SECONDS);
+    if (error)
+        return null;
+    return data?.signedUrl || null;
+}
+async function withSignedProfilePhotos(profile) {
+    if (!profile)
+        return profile;
+    const [front, left, right, scalp] = await Promise.all([
+        toSignedPhotoUrl(profile.photo_front_url),
+        toSignedPhotoUrl(profile.photo_left_url),
+        toSignedPhotoUrl(profile.photo_right_url),
+        toSignedPhotoUrl(profile.photo_scalp_url),
+    ]);
+    return {
+        ...profile,
+        photo_front_url: front || null,
+        photo_left_url: left || null,
+        photo_right_url: right || null,
+        photo_scalp_url: scalp || null,
+    };
+}
+async function withSignedCheckInPhotos(checkIn) {
+    if (!checkIn)
+        return checkIn;
+    const [front, left, right] = await Promise.all([
+        toSignedPhotoUrl(checkIn.photo_front_url),
+        toSignedPhotoUrl(checkIn.photo_left_url),
+        toSignedPhotoUrl(checkIn.photo_right_url),
+    ]);
+    return {
+        ...checkIn,
+        photo_front_url: front || null,
+        photo_left_url: left || null,
+        photo_right_url: right || null,
+    };
+}
+async function redactExpiredCheckInPhotos(userId) {
+    if (!PHOTO_RETENTION_DAYS || PHOTO_RETENTION_DAYS <= 0)
+        return;
+    const cutoff = new Date(Date.now() - PHOTO_RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
+    const { data, error } = await supabase_1.supabase
+        .from('photo_check_ins')
+        .select('id, photo_front_url, photo_left_url, photo_right_url, created_at')
+        .eq('user_id', userId)
+        .lt('created_at', cutoff);
+    if (error || !data || data.length === 0)
+        return;
+    const pathsToDelete = [];
+    const rowIds = [];
+    for (const row of data) {
+        rowIds.push(row.id);
+        const refs = [row.photo_front_url, row.photo_left_url, row.photo_right_url];
+        for (const ref of refs) {
+            if (isStoragePathRef(ref))
+                pathsToDelete.push(ref);
+        }
+    }
+    await removePrivatePhotoPaths(pathsToDelete);
+    const { error: updateError } = await supabase_1.supabase
+        .from('photo_check_ins')
+        .update({
+        photo_front_url: null,
+        photo_left_url: null,
+        photo_right_url: null,
+    })
+        .in('id', rowIds);
+    if (updateError) {
+        console.error('⚠️ Failed to redact expired check-in photo refs:', updateError.message);
+    }
+    else {
+        console.log(`🧹 Redacted photo refs for ${rowIds.length} expired check-ins`);
+    }
+}
+function toLevelLabel(score) {
+    if (score === undefined || score === null || Number.isNaN(score))
+        return 'Unknown';
+    if (score >= 0.75)
+        return 'High';
+    if (score >= 0.45)
+        return 'Medium';
+    return 'Low';
+}
+function clamp01(value) {
+    if (!Number.isFinite(value))
+        return 0.5;
+    return Math.max(0, Math.min(1, value));
+}
+function normalizeSkinScore(raw) {
+    const value = Number(raw);
+    if (!Number.isFinite(value))
+        return null;
+    const normalized = value > 1 ? value / 100 : value;
+    return Math.max(0, Math.min(1, normalized));
+}
+function inferInsightFromProfileImage(profile) {
+    const skin = profile?.image_analysis?.skin;
+    if (!skin)
+        return null;
+    const hydrationRaw = Number(skin.hydration_score);
+    const oilinessRaw = Number(skin.oiliness_score);
+    const textureRaw = Number(skin.texture_score);
+    const hasAnySignal = [hydrationRaw, oilinessRaw, textureRaw].some(Number.isFinite);
+    if (!hasAnySignal)
+        return null;
+    const hydration = Number.isFinite(hydrationRaw) ? clamp01(hydrationRaw) : 0.5;
+    const oiliness = Number.isFinite(oilinessRaw) ? clamp01(oilinessRaw) : 0.5;
+    const texture = Number.isFinite(textureRaw) ? clamp01(textureRaw) : 0.5;
+    const concerns = Array.isArray(skin?.concerns_detected) ? skin.concerns_detected : [];
+    const concernPenalty = Math.min(0.08, concerns.length * 0.02);
+    const averageRaw = (hydration + (1 - oiliness) + texture) / 3;
+    const skinScore = Number(Math.max(0.35, Math.min(0.95, averageRaw - concernPenalty)).toFixed(2));
+    return {
+        skinScore,
+        hydration: toLevelLabel(hydration),
+        protection: toLevelLabel(1 - oiliness * 0.4),
+        texture: toLevelLabel(texture),
+        source: 'skin_page_photo_inference',
+        notes: 'Inferred from onboarding/check-in photo analysis.',
+    };
+}
+function inferInsightFromProfileSignals(profile, streaks) {
+    const skinType = String(profile?.skin_type || 'normal').toLowerCase();
+    const concerns = (Array.isArray(profile?.skin_concerns) ? profile.skin_concerns : [])
+        .map((c) => String(c).toLowerCase());
+    const sunscreenUsage = String(profile?.sunscreen_usage || 'sometimes').toLowerCase();
+    const hydrationSignal = skinType === 'dry' ? 0.42
+        : skinType === 'oily' ? 0.63
+            : skinType === 'sensitive' ? 0.52
+                : 0.56;
+    const sunscreenSignal = sunscreenUsage === 'always' ? 0.86
+        : sunscreenUsage === 'often' ? 0.74
+            : sunscreenUsage === 'sometimes' ? 0.58
+                : sunscreenUsage === 'rarely' ? 0.44
+                    : 0.34;
+    const textureConcernPenalty = concerns.some((c) => c.includes('texture')) ? 0.12 : 0;
+    const acnePenalty = concerns.some((c) => c.includes('acne')) ? 0.1 : 0;
+    const agingPenalty = concerns.some((c) => c.includes('aging') || c.includes('wrinkle')) ? 0.08 : 0;
+    const pigmentationPenalty = concerns.some((c) => c.includes('pigment') || c.includes('dark_spot')) ? 0.06 : 0;
+    const concernPenalty = Math.min(0.2, textureConcernPenalty + acnePenalty + agingPenalty + pigmentationPenalty);
+    const textureSignal = Math.max(0.35, Math.min(0.8, 0.66 - concernPenalty));
+    const streakValue = Math.max(Number(streaks?.morning || 0), Number(streaks?.evening || 0));
+    const streakBonus = Math.min(0.08, streakValue * 0.005);
+    const fragranceBonus = profile?.fragrance_free ? 0.01 : 0;
+    const scoreRaw = (hydrationSignal * 0.4) + (sunscreenSignal * 0.35) + (textureSignal * 0.25) + streakBonus + fragranceBonus;
+    const skinScore = Number(Math.max(0.35, Math.min(0.92, scoreRaw)).toFixed(2));
+    return {
+        skinScore,
+        hydration: toLevelLabel(hydrationSignal),
+        protection: toLevelLabel(sunscreenSignal),
+        texture: toLevelLabel(textureSignal),
+        source: 'skin_page_profile_inference',
+        notes: 'Inferred from onboarding profile + routine consistency signals.',
+    };
+}
+function buildInsightFromImageAnalysis(imageAnalysis, source, notes) {
+    if (!imageAnalysis?.skin)
+        return null;
+    const hydrationScore = clamp01(Number(imageAnalysis.skin?.hydration_score || 0));
+    const oilinessScore = clamp01(Number(imageAnalysis.skin?.oiliness_score || 0));
+    const textureScore = clamp01(Number(imageAnalysis.skin?.texture_score || 0));
+    const averageRaw = (hydrationScore + (1 - oilinessScore) + textureScore) / 3;
+    const skinScore = Number(Math.max(0.35, Math.min(0.95, averageRaw)).toFixed(2));
+    return {
+        skinScore,
+        hydration: toLevelLabel(hydrationScore),
+        protection: toLevelLabel(1 - oilinessScore * 0.4),
+        texture: toLevelLabel(textureScore),
+        notes: notes || 'Updated from private photo analysis.',
+        source,
+    };
+}
+async function loadPhotoBuffer(ref) {
+    if (!ref)
+        return null;
+    const trimmed = ref.trim();
+    if (!trimmed)
+        return null;
+    if (trimmed.startsWith('data:')) {
+        return parseDataImage(trimmed)?.buffer || null;
+    }
+    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+        try {
+            const response = await fetch(trimmed);
+            if (!response.ok)
+                return null;
+            const arrayBuffer = await response.arrayBuffer();
+            const buffer = Buffer.from(arrayBuffer);
+            return buffer.length > 0 ? buffer : null;
+        }
+        catch {
+            return null;
+        }
+    }
+    try {
+        const { data, error } = await supabase_1.supabase.storage.from(PHOTO_BUCKET).download(trimmed);
+        if (error || !data)
+            return null;
+        const arrayBuffer = await data.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
+        return buffer.length > 0 ? buffer : null;
+    }
+    catch {
         return null;
     }
+}
+function computePhotoSignalHeuristics(buffers) {
+    if (!buffers.length)
+        return null;
+    let byteCount = 0;
+    let byteSum = 0;
+    let diffSum = 0;
+    let chunkVariance = 0;
+    let chunkCount = 0;
+    for (const buffer of buffers) {
+        const sampleStride = Math.max(1, Math.floor(buffer.length / 18000));
+        let prev = -1;
+        let localCount = 0;
+        let localSum = 0;
+        const sampled = [];
+        for (let i = 0; i < buffer.length; i += sampleStride) {
+            const v = buffer[i];
+            sampled.push(v);
+            byteSum += v;
+            byteCount += 1;
+            localSum += v;
+            localCount += 1;
+            if (prev >= 0)
+                diffSum += Math.abs(v - prev);
+            prev = v;
+        }
+        if (localCount > 0) {
+            const mean = localSum / localCount;
+            let variance = 0;
+            for (const v of sampled)
+                variance += Math.pow(v - mean, 2);
+            chunkVariance += variance / localCount;
+            chunkCount += 1;
+        }
+    }
+    if (!byteCount)
+        return null;
+    const mean = byteSum / byteCount / 255;
+    const normalizedDiff = clamp01((diffSum / Math.max(1, byteCount - 1)) / 90);
+    const variance = clamp01((chunkVariance / Math.max(1, chunkCount)) / 6500);
+    const hydration = clamp01(0.4 + (1 - variance) * 0.35 + (mean - 0.5) * 0.2);
+    const oiliness = clamp01(0.48 + variance * 0.28 + normalizedDiff * 0.18 - mean * 0.1);
+    const texture = clamp01(0.45 + (1 - normalizedDiff) * 0.3 + (1 - variance) * 0.2);
+    const concerns = [];
+    if (oiliness > 0.62)
+        concerns.push('slight_oiliness');
+    if (hydration < 0.44)
+        concerns.push('dehydration_signs');
+    if (texture < 0.5)
+        concerns.push('mild_texture');
+    const detectedType = oiliness > 0.63 ? 'oily'
+        : hydration < 0.42 ? 'dry'
+            : Math.abs(oiliness - 0.5) > 0.09 ? 'combination'
+                : 'normal';
+    return {
+        detected_tone: mean > 0.62 ? 'light-medium' : mean > 0.44 ? 'medium' : 'medium-deep',
+        detected_type: detectedType,
+        oiliness_score: Number(oiliness.toFixed(2)),
+        hydration_score: Number(hydration.toFixed(2)),
+        texture_score: Number(texture.toFixed(2)),
+        concerns_detected: concerns,
+        redness_areas: [],
+        pore_visibility: oiliness > 0.6 ? 'moderate' : 'low',
+        confidence: Number((0.64 + buffers.length * 0.08).toFixed(2)),
+    };
+}
+async function analyzeImagesWithVisionModel(imageUrls) {
+    if (!openaiChat || imageUrls.length === 0)
+        return null;
+    const visionModel = process.env.GLOWUP_VISION_MODEL || 'gpt-4o-mini';
+    const imageContent = imageUrls.slice(0, 3).map(url => ({ type: 'image_url', image_url: { url, detail: 'low' } }));
+    const completion = await openaiChat.chat.completions.create({
+        model: visionModel,
+        response_format: { type: 'json_object' },
+        temperature: 0.2,
+        max_tokens: 700,
+        messages: [
+            {
+                role: 'system',
+                content: 'Analyze onboarding skin photos for skincare routine generation. Return ONLY JSON with keys: detected_tone, detected_type, oiliness_score, hydration_score, texture_score, concerns_detected (array of short strings), redness_areas (array), pore_visibility (low|moderate|high), confidence (0-1). Scores must be numbers between 0 and 1.'
+            },
+            {
+                role: 'user',
+                content: [
+                    { type: 'text', text: 'Evaluate the photos and return the JSON only.' },
+                    ...imageContent
+                ]
+            }
+        ]
+    });
+    const raw = completion.choices[0]?.message?.content;
+    if (!raw)
+        return null;
+    const parsed = JSON.parse(raw);
+    return {
+        detected_tone: String(parsed.detected_tone || 'medium'),
+        detected_type: String(parsed.detected_type || 'combination').toLowerCase(),
+        oiliness_score: Number(clamp01(Number(parsed.oiliness_score))),
+        hydration_score: Number(clamp01(Number(parsed.hydration_score))),
+        texture_score: Number(clamp01(Number(parsed.texture_score))),
+        concerns_detected: Array.isArray(parsed.concerns_detected) ? parsed.concerns_detected.slice(0, 5).map((v) => String(v)) : [],
+        redness_areas: Array.isArray(parsed.redness_areas) ? parsed.redness_areas.slice(0, 5).map((v) => String(v)) : [],
+        pore_visibility: ['low', 'moderate', 'high'].includes(String(parsed.pore_visibility || '').toLowerCase())
+            ? String(parsed.pore_visibility).toLowerCase()
+            : 'moderate',
+        confidence: Number(clamp01(Number(parsed.confidence || 0.7))),
+    };
+}
+async function analyzeImages(photos) {
+    const refs = [photos.front, photos.left, photos.right].filter(Boolean);
+    if (refs.length === 0)
+        return null;
+    const signedOrRawUrls = await Promise.all(refs.map(async (ref) => {
+        if (ref.startsWith('data:') || ref.startsWith('http://') || ref.startsWith('https://'))
+            return ref;
+        return (await toSignedPhotoUrl(ref)) || '';
+    }));
+    const imageUrls = signedOrRawUrls.filter(Boolean);
+    let skinSignals = null;
+    try {
+        skinSignals = await analyzeImagesWithVisionModel(imageUrls);
+    }
+    catch (err) {
+        console.log('⚠️ Vision model analysis failed, using deterministic heuristics:', err?.message);
+    }
+    if (!skinSignals) {
+        const buffers = (await Promise.all(refs.map(loadPhotoBuffer))).filter(Boolean);
+        skinSignals = computePhotoSignalHeuristics(buffers);
+    }
+    if (!skinSignals)
+        return null;
     return {
         analyzed_at: new Date().toISOString(),
-        model_version: '1.0-mock',
+        model_version: skinSignals?.confidence ? 'vision+heuristic-v2' : 'heuristic-v2',
         skin: {
-            detected_tone: 'medium',
-            detected_type: 'combination',
-            oiliness_score: Math.random() * 0.4 + 0.3, // 0.3-0.7
-            hydration_score: Math.random() * 0.4 + 0.3,
-            texture_score: Math.random() * 0.3 + 0.5, // 0.5-0.8
-            concerns_detected: ['mild_texture', 'slight_oiliness'],
-            redness_areas: [],
-            pore_visibility: 'moderate'
+            detected_tone: skinSignals.detected_tone,
+            detected_type: skinSignals.detected_type,
+            oiliness_score: skinSignals.oiliness_score,
+            hydration_score: skinSignals.hydration_score,
+            texture_score: skinSignals.texture_score,
+            concerns_detected: skinSignals.concerns_detected,
+            redness_areas: skinSignals.redness_areas,
+            pore_visibility: skinSignals.pore_visibility
         },
         hair: {
-            detected_type: 'wavy',
-            frizz_level: 'low',
+            detected_type: 'not_analyzed',
+            frizz_level: 'unknown',
             damage_indicators: [],
-            scalp_condition: 'healthy'
+            scalp_condition: 'unknown'
         },
         confidence_scores: {
-            skin_analysis: 0.75 + Math.random() * 0.15,
-            hair_analysis: 0.70 + Math.random() * 0.15
+            skin_analysis: Number(clamp01(Number(skinSignals.confidence || 0.72)).toFixed(2)),
+            hair_analysis: 0.0
         },
         recommendations_from_analysis: [
-            'Consider a gentle BHA for texture',
-            'Hydrating serum would benefit your skin',
-            'SPF is essential for your skin tone'
+            skinSignals.hydration_score < 0.45 ? 'Prioritize hydration and barrier support in your routine.' : 'Maintain hydration with a lightweight humectant serum.',
+            skinSignals.oiliness_score > 0.6 ? 'Use oil-balancing cleanser and non-comedogenic moisturizers.' : 'Use gentle cleanse and avoid over-stripping.',
+            'Daily SPF remains essential for long-term results.'
         ]
     };
 }
@@ -1278,24 +2195,34 @@ app.post('/api/skin-profiles', async (req, res) => {
             return res.status(400).json({ error: 'User ID is required' });
         }
         console.log('📝 Saving skin profile for user:', userId);
+        const visualHistoryEnabled = profile?.photoCheckIns !== false;
+        const persistedPhotos = await persistIncomingPhotos(userId, photos, 'onboarding');
+        const photoRefs = visualHistoryEnabled ? persistedPhotos.stored : {};
         // Analyze images if provided
         let imageAnalysis = null;
-        if (photos && (photos.front || photos.left || photos.right)) {
+        if (hasAnyPhotos(persistedPhotos.stored) || hasAnyPhotos(photos)) {
             console.log('🔍 Analyzing uploaded photos...');
-            imageAnalysis = await analyzeImages(photos);
+            imageAnalysis = await analyzeImages(hasAnyPhotos(persistedPhotos.stored) ? persistedPhotos.stored : photos);
             console.log('✅ Image analysis complete. Confidence:', imageAnalysis?.confidence_scores?.skin_analysis);
+        }
+        if (!visualHistoryEnabled && persistedPhotos.uploadedPaths.length > 0) {
+            await removePrivatePhotoPaths(persistedPhotos.uploadedPaths);
         }
         // Combine user input with image analysis
         const combinedProfile = {
             ...profile,
-            photoFrontUrl: photos?.front,
-            photoLeftUrl: photos?.left,
-            photoRightUrl: photos?.right,
-            photoScalpUrl: photos?.scalp,
+            photoFrontUrl: photoRefs.front,
+            photoLeftUrl: photoRefs.left,
+            photoRightUrl: photoRefs.right,
+            photoScalpUrl: photoRefs.scalp,
             imageAnalysis
         };
         const savedProfile = await supabase_1.DatabaseService.saveSkinProfile(userId, combinedProfile);
         if (savedProfile) {
+            const insight = buildInsightFromImageAnalysis(imageAnalysis, 'onboarding_photo');
+            if (insight) {
+                await supabase_1.DatabaseService.saveInsight(userId, insight);
+            }
             // Mark user as onboarded in users table
             const onboardedSuccess = await supabase_1.DatabaseService.markUserOnboarded(userId);
             if (onboardedSuccess) {
@@ -1304,9 +2231,10 @@ app.post('/api/skin-profiles', async (req, res) => {
             else {
                 console.error('⚠️ Failed to mark user as onboarded in users table:', userId);
             }
+            const profileWithSignedPhotos = await withSignedProfilePhotos(savedProfile);
             res.json({
                 success: true,
-                profile: savedProfile,
+                profile: profileWithSignedPhotos,
                 imageAnalysis: imageAnalysis,
                 onboarded: onboardedSuccess
             });
@@ -1325,7 +2253,8 @@ app.get('/api/skin-profiles/:userId', async (req, res) => {
     try {
         const profile = await supabase_1.DatabaseService.getSkinProfileByUserId(req.params.userId);
         if (profile) {
-            res.json({ success: true, profile });
+            const profileWithSignedPhotos = await withSignedProfilePhotos(profile);
+            res.json({ success: true, profile: profileWithSignedPhotos });
         }
         else {
             res.status(404).json({ error: 'Skin profile not found' });
@@ -1345,12 +2274,23 @@ app.post('/api/skin-profiles/:userId/analyze', async (req, res) => {
             return res.status(400).json({ error: 'At least one photo is required' });
         }
         console.log('🔍 Re-analyzing photos for user:', userId);
-        const imageAnalysis = await analyzeImages(photos);
+        const existingProfile = await supabase_1.DatabaseService.getSkinProfileByUserId(userId);
+        const visualHistoryEnabled = existingProfile?.photo_check_ins !== false;
+        const persistedPhotos = await persistIncomingPhotos(userId, photos, 'reanalyze');
+        const imageAnalysis = await analyzeImages(hasAnyPhotos(persistedPhotos.stored) ? persistedPhotos.stored : photos);
         const updatedProfile = await supabase_1.DatabaseService.updateImageAnalysis(userId, imageAnalysis);
+        if (!visualHistoryEnabled && persistedPhotos.uploadedPaths.length > 0) {
+            await removePrivatePhotoPaths(persistedPhotos.uploadedPaths);
+        }
         if (updatedProfile) {
+            const insight = buildInsightFromImageAnalysis(imageAnalysis, 'reanalyze_photo');
+            if (insight) {
+                await supabase_1.DatabaseService.saveInsight(userId, insight);
+            }
+            const profileWithSignedPhotos = await withSignedProfilePhotos(updatedProfile);
             res.json({
                 success: true,
-                profile: updatedProfile,
+                profile: profileWithSignedPhotos,
                 imageAnalysis
             });
         }
@@ -1371,11 +2311,14 @@ app.post('/api/photo-check-ins', async (req, res) => {
             return res.status(400).json({ error: 'User ID and skin profile ID are required' });
         }
         console.log('📸 Saving photo check-in for user:', userId);
+        const profile = await supabase_1.DatabaseService.getSkinProfileByUserId(userId);
+        const visualHistoryEnabled = profile?.photo_check_ins !== false;
+        const persistedPhotos = await persistIncomingPhotos(userId, photos, 'checkin');
         // Analyze new photos
         let imageAnalysis = null;
         let comparison = null;
-        if (photos && (photos.front || photos.left || photos.right)) {
-            imageAnalysis = await analyzeImages(photos);
+        if (hasAnyPhotos(persistedPhotos.stored) || hasAnyPhotos(photos)) {
+            imageAnalysis = await analyzeImages(hasAnyPhotos(persistedPhotos.stored) ? persistedPhotos.stored : photos);
             // Get baseline for comparison
             const baselineProfile = await supabase_1.DatabaseService.getSkinProfileByUserId(userId);
             if (baselineProfile?.image_analysis) {
@@ -1387,10 +2330,13 @@ app.post('/api/photo-check-ins', async (req, res) => {
                 };
             }
         }
+        if (!visualHistoryEnabled && persistedPhotos.uploadedPaths.length > 0) {
+            await removePrivatePhotoPaths(persistedPhotos.uploadedPaths);
+        }
         const checkIn = await supabase_1.DatabaseService.savePhotoCheckIn(userId, skinProfileId, {
-            photoFrontUrl: photos?.front,
-            photoLeftUrl: photos?.left,
-            photoRightUrl: photos?.right,
+            photoFrontUrl: visualHistoryEnabled ? persistedPhotos.stored.front : undefined,
+            photoLeftUrl: visualHistoryEnabled ? persistedPhotos.stored.left : undefined,
+            photoRightUrl: visualHistoryEnabled ? persistedPhotos.stored.right : undefined,
             imageAnalysis,
             comparisonToBaseline: comparison,
             userNotes,
@@ -1398,7 +2344,13 @@ app.post('/api/photo-check-ins', async (req, res) => {
             improvementReported: improvement
         });
         if (checkIn) {
-            res.json({ success: true, checkIn, comparison });
+            const insight = buildInsightFromImageAnalysis(imageAnalysis, 'photo_check_in', userNotes);
+            if (insight) {
+                await supabase_1.DatabaseService.saveInsight(userId, insight);
+            }
+            await redactExpiredCheckInPhotos(userId);
+            const signedCheckIn = await withSignedCheckInPhotos(checkIn);
+            res.json({ success: true, checkIn: signedCheckIn, comparison });
         }
         else {
             res.status(400).json({ error: 'Failed to save check-in' });
@@ -1412,8 +2364,10 @@ app.post('/api/photo-check-ins', async (req, res) => {
 // Get photo check-ins history
 app.get('/api/photo-check-ins/:userId', async (req, res) => {
     try {
+        await redactExpiredCheckInPhotos(req.params.userId);
         const checkIns = await supabase_1.DatabaseService.getPhotoCheckIns(req.params.userId);
-        res.json({ success: true, checkIns });
+        const signedCheckIns = await Promise.all(checkIns.map((checkIn) => withSignedCheckInPhotos(checkIn)));
+        res.json({ success: true, checkIns: signedCheckIns });
     }
     catch (error) {
         console.error('Error:', error);
@@ -2111,9 +3065,106 @@ async function executeChatTool(toolName, args, userId) {
         return JSON.stringify({ error: `Tool failed: ${err?.message}` });
     }
 }
-// ═══════════════════════════════════════════════════════════════
-// CHAT ENDPOINT — with dynamic tool calling
-// ═══════════════════════════════════════════════════════════════
+function normalizeLightweightMessages(raw, maxMessages) {
+    if (!Array.isArray(raw))
+        return [];
+    const normalized = [];
+    for (const item of raw) {
+        const role = item?.role === 'assistant' ? 'assistant' : (item?.role === 'user' ? 'user' : null);
+        const content = typeof item?.content === 'string' ? item.content.trim() : '';
+        if (!role || !content)
+            continue;
+        normalized.push({
+            role,
+            content: content.slice(0, 700),
+        });
+    }
+    if (normalized.length === 0)
+        return [];
+    return normalized.slice(-maxMessages);
+}
+app.post('/api/chat/guest', async (req, res) => {
+    try {
+        const messages = normalizeLightweightMessages(req.body?.messages, 8);
+        if (messages.length === 0) {
+            return res.status(400).json({ error: 'Messages array is required' });
+        }
+        if (!openaiChat) {
+            return res.json({
+                success: true,
+                message: "I can still help with basics in guest mode: use a gentle cleanser, moisturizer, and daily SPF 30+. Sign in for personalized routines, progress tracking, and premium features."
+            });
+        }
+        const configuredGuestModel = process.env.GLOWUP_GUEST_CHAT_MODEL;
+        const modelCandidates = Array.from(new Set([configuredGuestModel, 'gpt-4.1-nano', 'gpt-4.1-mini', 'gpt-4o-mini']
+            .filter((m) => !!m && m.trim().length > 0)));
+        const systemPrompt = `You are GlowUp Guest Assistant inside the GlowUp iOS app.
+
+You are in guest mode. Give useful, safe, basic skincare guidance with lightweight context.
+
+What GlowUp does:
+- GlowUp helps users improve skin with AI-guided routines, product discovery, and progress workflows.
+- Signed-in users can save routines, keep conversation history, and track improvements over time.
+- Premium (GlowUp+, $1.99/month) adds enhanced AI help, smart price scouting, free shipping perks, and expanded catalog access.
+
+Guest-mode rules:
+- Use only the conversation provided in this request. There is no long-term memory.
+- Keep answers concise and practical.
+- Do not claim you can access user profile data, photos, or saved history.
+- Do not diagnose medical conditions. For severe or persistent issues, suggest seeing a dermatologist.
+- No tool calling, no product-card syntax, no fabricated app data.
+
+Account and premium guidance:
+- When relevant, briefly mention that creating an account unlocks personalization and saved progress.
+- When relevant, briefly mention premium benefits naturally (never pushy, never spammy).
+
+Answer style:
+- Friendly, clear, and direct.
+- Prefer short bullet lists for routines.
+- End with one practical next step.`;
+        let reply = '';
+        let usedModel = modelCandidates[0];
+        let lastError = null;
+        for (const candidate of modelCandidates) {
+            try {
+                const completion = await openaiChat.chat.completions.create({
+                    model: candidate,
+                    messages: [
+                        { role: 'system', content: systemPrompt },
+                        ...messages.map((m) => ({ role: m.role, content: m.content })),
+                    ],
+                    max_tokens: 420,
+                    temperature: 0.6,
+                });
+                reply = completion.choices[0]?.message?.content?.trim() || '';
+                usedModel = candidate;
+                if (reply)
+                    break;
+            }
+            catch (err) {
+                lastError = err;
+            }
+        }
+        if (!reply) {
+            if (lastError) {
+                console.error('❌ Guest chat error:', lastError?.message || lastError);
+            }
+            reply = "I can help with basic skincare in guest mode. Start with: gentle cleanser, moisturizer, and SPF 30+ every morning. If you want personalized guidance and saved progress, create an account.";
+        }
+        res.json({
+            success: true,
+            message: reply,
+            model: usedModel,
+        });
+    }
+    catch (error) {
+        console.error('❌ Guest chat endpoint error:', error?.message || error);
+        res.status(500).json({
+            error: 'Guest chat failed',
+            message: 'Sorry, guest chat is temporarily unavailable.'
+        });
+    }
+});
 app.post('/api/chat', async (req, res) => {
     try {
         const { messages, userId, conversationId } = req.body;
@@ -2415,7 +3466,7 @@ app.get('/api/home-feed/:userId', async (req, res) => {
         const cached = feedCache.get(cacheKey);
         const hasFreshCache = cached && (Date.now() - cached.ts < FEED_CACHE_TTL);
         // ── 4. Parallel fetches: saved routine, trending, new arrivals, personalized, AI fallback ──
-        const [savedRoutineRow, trendingRes, newArrivalsRes, forYouRes, aiResult] = await Promise.all([
+        const [rawRoutineRow, trendingRes, newArrivalsRes, forYouRes, aiResult] = await Promise.all([
             // Load saved routine (product-enriched) from DB
             supabase_1.DatabaseService.getLatestRoutine(userId),
             // Trending = highest rated products
@@ -2501,6 +3552,7 @@ app.get('/api/home-feed/:userId', async (req, res) => {
                 }
             })(),
         ]);
+        const savedRoutineRow = await ensureUserHasProductRoutine(userId, profile, rawRoutineRow);
         const trending = (trendingRes.data || []).map(mapProduct);
         const newArrivals = (newArrivalsRes.data || []).map(mapProduct);
         const forYou = await hydrateForYouProducts(forYouRes || [], profile);
@@ -2717,7 +3769,7 @@ app.get('/api/skin-page/:userId', async (req, res) => {
     console.log(`✨ Skin page request for user: ${userId}`);
     try {
         // ── 1. Fetch all user data in parallel ──
-        const [profile, latestRoutineRow, latestInsight, streaks, checkins] = await Promise.all([
+        const [profile, latestRoutineRow, latestInsightRow, streaks, checkins] = await Promise.all([
             supabase_1.DatabaseService.getSkinProfileByUserId(userId),
             supabase_1.DatabaseService.getLatestRoutine(userId),
             supabase_1.DatabaseService.getLatestInsightByUserId(userId),
@@ -2727,8 +3779,19 @@ app.get('/api/skin-page/:userId', async (req, res) => {
         if (!profile) {
             return res.status(404).json({ error: 'No skin profile found — complete onboarding first' });
         }
+        const ensuredRoutineRow = await ensureUserHasProductRoutine(userId, profile, latestRoutineRow);
+        let latestInsight = latestInsightRow;
+        const inferredFromImage = inferInsightFromProfileImage(profile);
+        const inferredFromProfile = inferInsightFromProfileSignals(profile, streaks || { morning: 0, evening: 0 });
+        // Backfill insight from photo analysis when legacy users have no insight row yet.
+        if ((!latestInsight || latestInsight.skin_score === null || latestInsight.skin_score === undefined) && (inferredFromImage || inferredFromProfile)) {
+            const savedInferredInsight = await supabase_1.DatabaseService.saveInsight(userId, inferredFromImage || inferredFromProfile);
+            if (savedInferredInsight) {
+                latestInsight = savedInferredInsight;
+            }
+        }
         // ── 2. Extract routine with product details from stored routine_data ──
-        const routineData = latestRoutineRow?.routine_data;
+        const routineData = ensuredRoutineRow?.routine_data;
         const inferenceRoutine = routineData?.inference?.routine;
         const summaryRoutine = routineData?.summary?.routine;
         const rawRoutine = inferenceRoutine || summaryRoutine;
@@ -2864,9 +3927,14 @@ app.get('/api/skin-page/:userId', async (req, res) => {
         const skinToneLabel = profile.skin_tone !== undefined
             ? (profile.skin_tone < 0.3 ? 'Fair' : profile.skin_tone < 0.5 ? 'Medium' : profile.skin_tone < 0.7 ? 'Medium-deep' : 'Deep')
             : 'Unknown';
-        const skinScore = latestInsight?.skin_score
-            ? (latestInsight.skin_score > 1 ? Math.min(latestInsight.skin_score / 100, 1) : latestInsight.skin_score)
-            : 0.85;
+        const normalizedInsightScore = normalizeSkinScore(latestInsight?.skin_score);
+        const skinScore = normalizedInsightScore
+            ?? inferredFromImage?.skinScore
+            ?? inferredFromProfile?.skinScore
+            ?? 0.72;
+        const hydrationLevel = latestInsight?.hydration || inferredFromImage?.hydration || inferredFromProfile?.hydration || null;
+        const protectionLevel = latestInsight?.protection || inferredFromImage?.protection || inferredFromProfile?.protection || null;
+        const textureLevel = latestInsight?.texture || inferredFromImage?.texture || inferredFromProfile?.texture || null;
         // ── 4. AI agent: dynamic tips & page summary (cached) ──
         const cacheKey = `skin-page:${userId}`;
         const cached = skinPageCache.get(cacheKey);
@@ -2906,8 +3974,8 @@ Progress:
 - Morning streak: ${streaks?.morning || 0} days
 - Evening streak: ${streaks?.evening || 0} days
 - Skin score: ${Math.round(skinScore * 100)}/100
-- Hydration: ${latestInsight?.hydration || 'Unknown'}
-- Protection: ${latestInsight?.protection || 'Unknown'}`;
+- Hydration: ${hydrationLevel || 'Unknown'}
+- Protection: ${protectionLevel || 'Unknown'}`;
                 const aiResult = await withTimeout(openaiChat.chat.completions.create({
                     model: FEED_MODEL,
                     messages: [
@@ -2950,10 +4018,10 @@ Progress:
             },
             routine,
             insights: {
-                skin_score: skinScore,
-                hydration: latestInsight?.hydration || null,
-                protection: latestInsight?.protection || null,
-                texture: latestInsight?.texture || null,
+                skin_score: Number(skinScore.toFixed(2)),
+                hydration: hydrationLevel,
+                protection: protectionLevel,
+                texture: textureLevel,
             },
             streaks: {
                 morning: streaks?.morning || 0,
@@ -2981,138 +4049,6 @@ Progress:
         console.error('❌ Skin page error:', err?.message);
         res.status(500).json({ error: 'Failed to load skin page' });
     }
-});
-// ═══════════════════════════════════════════════════════════════
-// SUBSCRIPTION ENDPOINTS (Stripe)
-// ═══════════════════════════════════════════════════════════════
-// Create a PaymentIntent for subscription
-app.post('/api/subscription/create-payment-intent', async (req, res) => {
-    try {
-        const { userId, priceId } = req.body; // e.g. price_12345
-        // 1. Get user from DB
-        const user = await supabase_1.DatabaseService.getUserById(userId);
-        if (!user) {
-            return res.status(404).json({ error: 'User not found' });
-        }
-        // 2. Get or create Stripe Customer
-        let customerId = user.stripe_customer_id;
-        if (!customerId) {
-            const customer = await stripe.customers.create({
-                email: user.email,
-                name: user.name,
-                metadata: { userId: user.id }
-            });
-            customerId = customer.id;
-            // Update user with Stripe Customer ID
-            await supabase_1.DatabaseService.markUserPremium(userId, user.is_premium || false, customerId);
-        }
-        // 3. Create a Subscription
-        const subscription = await stripe.subscriptions.create({
-            customer: customerId,
-            items: [{ price: priceId }],
-            payment_behavior: 'default_incomplete',
-            payment_settings: { save_default_payment_method: 'on_subscription' },
-            expand: ['latest_invoice.payment_intent'],
-        });
-        const invoice = subscription.latest_invoice;
-        const paymentIntent = invoice.payment_intent;
-        res.json({
-            subscriptionId: subscription.id,
-            clientSecret: paymentIntent.client_secret,
-            customerId: customerId
-        });
-    }
-    catch (error) {
-        console.error('Error creating subscription:', error);
-        res.status(500).json({ error: error.message });
-    }
-});
-// Webhook to handle successful payments
-app.post('/api/subscription/webhook', body_parser_1.default.raw({ type: 'application/json' }), async (req, res) => {
-    const sig = req.headers['stripe-signature'];
-    const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
-    let event;
-    try {
-        // If you haven't set up raw body parsing correctly, this verification will fail.
-        // For now, we trust the signature if we can verify it, otherwise proceed with caution.
-        if (endpointSecret) {
-            event = stripe.webhooks.constructEvent(req.rawBody || req.body, sig, endpointSecret);
-        }
-        else {
-            event = req.body;
-        }
-    }
-    catch (err) {
-        console.error(`Webhook Error: ${err.message}`);
-        return res.status(400).send(`Webhook Error: ${err.message}`);
-    }
-    // Handle the event
-    switch (event.type) {
-        case 'invoice.payment_succeeded':
-            const invoice = event.data.object;
-            if (invoice.subscription) {
-                // Retrieve subscription to find customer
-                const subscription = await stripe.subscriptions.retrieve(invoice.subscription);
-                const customerId = subscription.customer;
-                const customer = await stripe.customers.retrieve(customerId);
-                if (customer.metadata && customer.metadata.userId) {
-                    await supabase_1.DatabaseService.markUserPremium(customer.metadata.userId, true, customerId);
-                    console.log(`✅ Marked user ${customer.metadata.userId} as premium`);
-                }
-            }
-            break;
-        case 'customer.subscription.deleted':
-            // Revoke access
-            const sub = event.data.object;
-            const custId = sub.customer;
-            const cust = await stripe.customers.retrieve(custId);
-            if (cust.metadata && cust.metadata.userId) {
-                await supabase_1.DatabaseService.markUserPremium(cust.metadata.userId, false); // Keep customerId
-                console.log(`❌ Revoked premium for user ${cust.metadata.userId}`);
-            }
-            break;
-        default:
-        // console.log(`Unhandled event type ${event.type}`);
-    }
-    res.json({ received: true });
-});
-// Demo/MVP endpoint to confirm Apple Pay (since we aren't tokenizing correctly without SDK)
-app.post('/api/subscription/confirm-apple-pay', async (req, res) => {
-    try {
-        const { userId } = req.body;
-        if (!userId) {
-            return res.status(400).json({ error: 'Missing userId', success: false });
-        }
-        console.log('✅ Confirming Apple Pay subscription for user:', userId);
-        // Mark user as premium with timeout handling
-        const success = await Promise.race([
-            supabase_1.DatabaseService.markUserPremium(userId, true),
-            new Promise((resolve) => {
-                setTimeout(() => {
-                    console.error('⚠️ Database query timeout for markUserPremium');
-                    resolve(false);
-                }, 5000); // 5 second timeout
-            })
-        ]);
-        if (success) {
-            console.log('✅ User marked as premium:', userId);
-            res.json({ success: true });
-        }
-        else {
-            console.error('❌ Failed to mark user as premium:', userId);
-            res.status(500).json({ error: 'Failed to update premium status', success: false });
-        }
-    }
-    catch (error) {
-        console.error('❌ Error in confirm-apple-pay:', error);
-        res.status(500).json({ error: error.message || 'Server error', success: false });
-    }
-});
-// Manual override for dev
-app.post('/api/users/premium', async (req, res) => {
-    const { userId, isPremium } = req.body;
-    const success = await supabase_1.DatabaseService.markUserPremium(userId, isPremium);
-    res.json({ success });
 });
 // ═══════════════════════════════════════════════════════════════
 // START SERVER

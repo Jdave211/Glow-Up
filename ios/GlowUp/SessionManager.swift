@@ -36,7 +36,7 @@ class SessionManager {
         set { UserDefaults.standard.set(newValue, forKey: isOnboardedKey) }
     }
     
-    /// Subscription status (simulated for now)
+    /// Cached subscription status (source of truth is StoreKit entitlement state)
     var isPremium: Bool {
         get { UserDefaults.standard.bool(forKey: isPremiumKey) }
         set { UserDefaults.standard.set(newValue, forKey: isPremiumKey) }
@@ -49,8 +49,7 @@ class SessionManager {
         userEmail = nil
         userName = nil
         isOnboarded = false
-        // Keep premium status? Maybe clear it for now.
-        isPremium = false
+        // Do not clear premium here; StoreKit entitlement is Apple ID scoped.
         shippingAddress = nil
     }
     

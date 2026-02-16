@@ -5,6 +5,7 @@ import UserNotifications
 struct MainTabView: View {
     let analysisResult: AnalysisResult
     var onSignOut: (() -> Void)?
+    @Environment(\.scenePhase) private var scenePhase
     @State private var selectedTab: Tab = .home
     @StateObject private var cartManager = CartManager()
     @StateObject private var chatSession = ChatSession()
@@ -88,6 +89,15 @@ struct MainTabView: View {
         .onAppear {
             cartManager.loadCart(userId: SessionManager.shared.userId)
             DeliveryTrackingManager.shared.startPolling(userId: SessionManager.shared.userId)
+            Task {
+                _ = await NotificationManager.shared.syncScheduledNotifications(userId: SessionManager.shared.userId)
+            }
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            guard newPhase == .active else { return }
+            Task {
+                _ = await NotificationManager.shared.syncScheduledNotifications(userId: SessionManager.shared.userId)
+            }
         }
         .onDisappear {
             DeliveryTrackingManager.shared.stopPolling()
@@ -1281,7 +1291,7 @@ struct SettingsView: View {
                                 Image(systemName: "sparkles")
                                     .font(.system(size: 18))
                                     .foregroundColor(.white)
-                                    .symbolEffect(.bounce, options: .repeating)
+                                    .symbolEffect(.bounce, value: showPaywall)
                             }
                             
                             VStack(alignment: .leading, spacing: 3) {
@@ -1553,22 +1563,22 @@ struct SettingsView: View {
     
     // MARK: - Notifications
     private func configureNotificationsOnLaunch() {
-        if notificationsEnabled {
-            Task { _ = await NotificationManager.shared.requestAuthorization() }
-            if routineReminders {
-                Task { try? await NotificationManager.shared.scheduleRoutineReminders(userId: SessionManager.shared.userId) }
+        Task {
+            let applied = await NotificationManager.shared.syncScheduledNotifications(userId: SessionManager.shared.userId)
+            guard !applied else { return }
+            await MainActor.run {
+                notificationsEnabled = false
+                routineReminders = false
+                photoReminders = false
             }
-            if photoReminders { NotificationManager.shared.scheduleBiweeklyPhotoCheckins() }
-        } else {
-            NotificationManager.shared.clearAll()
         }
     }
     
     private func handleNotificationToggle() {
         if notificationsEnabled {
             Task {
-                let granted = await NotificationManager.shared.requestAuthorization()
-                if !granted {
+                let applied = await NotificationManager.shared.syncScheduledNotifications(userId: SessionManager.shared.userId)
+                if !applied {
                     await MainActor.run {
                         notificationsEnabled = false
                         routineReminders = false
@@ -1587,23 +1597,33 @@ struct SettingsView: View {
     
     private func handleRoutineReminderToggle() {
         guard notificationsEnabled else { return }
-        if routineReminders {
-            Task { try? await NotificationManager.shared.scheduleRoutineReminders(userId: SessionManager.shared.userId) }
-        } else {
-            NotificationManager.shared.clear(ids: [
-                NotificationManager.Ids.routineMorning,
-                NotificationManager.Ids.routineEvening,
-                NotificationManager.Ids.exfoliationWeekly
-            ])
+        Task {
+            let applied = await NotificationManager.shared.syncScheduledNotifications(userId: SessionManager.shared.userId)
+            if !applied {
+                await MainActor.run {
+                    notificationsEnabled = false
+                    routineReminders = false
+                    photoReminders = false
+                    notificationAlertMessage = "Notifications are disabled. Enable them in iOS Settings to receive reminders."
+                    showNotificationAlert = true
+                }
+            }
         }
     }
     
     private func handlePhotoReminderToggle() {
         guard notificationsEnabled else { return }
-        if photoReminders {
-            NotificationManager.shared.scheduleBiweeklyPhotoCheckins()
-        } else {
-            NotificationManager.shared.clear(ids: [NotificationManager.Ids.photoBiweekly])
+        Task {
+            let applied = await NotificationManager.shared.syncScheduledNotifications(userId: SessionManager.shared.userId)
+            if !applied {
+                await MainActor.run {
+                    notificationsEnabled = false
+                    routineReminders = false
+                    photoReminders = false
+                    notificationAlertMessage = "Notifications are disabled. Enable them in iOS Settings to receive reminders."
+                    showNotificationAlert = true
+                }
+            }
         }
     }
     
@@ -1757,152 +1777,222 @@ struct ShippingSettingsSheet: View {
     @StateObject private var addressAutocomplete = AddressAutocomplete()
     @State private var showSuggestions = false
     
+    private var canSave: Bool {
+        !fullName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+        !line1.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+        !city.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+        !state.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+        !zip.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+        !country.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+    
     var body: some View {
-        VStack(spacing: 16) {
-            HStack {
-                Text("Shipping")
-                    .font(.custom("Didot", size: 26))
-                    .fontWeight(.bold)
-                    .foregroundColor(Color(hex: "2D2D2D"))
-                Spacer()
-                Button("Done") { dismiss() }
-                    .foregroundColor(Color(hex: "FF6B9D"))
-            }
-            .padding(.horizontal, 20)
-            .padding(.top, 12)
-            
-            VStack(spacing: 0) {
-                SettingsTextField(
-                    icon: "person.fill",
-                    iconColor: Color(hex: "FF6B9D"),
-                    title: "Full Name",
-                    text: $fullName,
-                    contentType: .name
-                )
-                Divider().padding(.leading, 44)
-                SettingsTextField(
-                    icon: "house.fill",
-                    iconColor: Color(hex: "9B6BFF"),
-                    title: "Address Line 1",
-                    text: $line1,
-                    contentType: .fullStreetAddress
-                )
-                Divider().padding(.leading, 44)
-                SettingsTextField(
-                    icon: "house",
-                    iconColor: Color(hex: "9B6BFF"),
-                    title: "Address Line 2",
-                    text: $line2,
-                    contentType: .streetAddressLine2
-                )
-                Divider().padding(.leading, 44)
-                SettingsTextField(
-                    icon: "mappin.and.ellipse",
-                    iconColor: Color(hex: "4ECDC4"),
-                    title: "City",
-                    text: $city,
-                    contentType: .addressCity
-                )
-                Divider().padding(.leading, 44)
-                SettingsTextField(
-                    icon: "flag.fill",
-                    iconColor: Color(hex: "FFB800"),
-                    title: "State",
-                    text: $state,
-                    contentType: .addressState
-                )
-                Divider().padding(.leading, 44)
-                SettingsTextField(
-                    icon: "number",
-                    iconColor: Color(hex: "FF6B9D"),
-                    title: "ZIP",
-                    text: $zip,
-                    contentType: .postalCode,
-                    keyboard: .numbersAndPunctuation,
-                    autocapitalization: .never
-                )
-                Divider().padding(.leading, 44)
-                SettingsTextField(
-                    icon: "globe",
-                    iconColor: Color(hex: "888888"),
-                    title: "Country",
-                    text: $country,
-                    contentType: .countryName
-                )
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .background(Color.white)
-            .cornerRadius(16)
-            .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 3)
-            .padding(.horizontal, 20)
-            .overlay(alignment: .topLeading) {
-                if showSuggestions && !addressAutocomplete.results.isEmpty {
-                    VStack(spacing: 0) {
-                        ForEach(addressAutocomplete.results.prefix(5), id: \.self) { suggestion in
-                            Button(action: {
-                                addressAutocomplete.select(suggestion) { result in
-                                    guard let result else { return }
-                                    line1 = result.line1
-                                    city = result.city
-                                    state = result.state
-                                    zip = result.zip
-                                    country = result.country
-                                    showSuggestions = false
+        ZStack(alignment: .bottom) {
+            ScrollView(showsIndicators: false) {
+                VStack(spacing: 18) {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Shipping")
+                                .font(.custom("Didot", size: 28))
+                                .fontWeight(.bold)
+                                .foregroundColor(Color(hex: "2D2D2D"))
+                            Text("Used for one-tap checkout and delivery updates.")
+                                .font(.system(size: 13))
+                                .foregroundColor(Color(hex: "8E8E93"))
+                        }
+                        Spacer()
+                        Button("Done") { dismiss() }
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundColor(Color(hex: "FF6B9D"))
+                    }
+                    .padding(.top, 8)
+                    
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Contact")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(Color(hex: "666666"))
+                        
+                        ShippingInputField(
+                            label: "Full Name",
+                            placeholder: "Jane Doe",
+                            text: $fullName,
+                            icon: "person.fill",
+                            iconColor: Color(hex: "FF6B9D"),
+                            contentType: .name
+                        )
+                    }
+                    .padding(14)
+                    .background(Color.white)
+                    .cornerRadius(16)
+                    .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 3)
+                    
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Street Address")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(Color(hex: "666666"))
+                        
+                        ShippingInputField(
+                            label: "Address Line 1",
+                            placeholder: "123 Main Street",
+                            text: $line1,
+                            icon: "house.fill",
+                            iconColor: Color(hex: "9B6BFF"),
+                            contentType: .fullStreetAddress
+                        )
+                        
+                        if showSuggestions && !addressAutocomplete.results.isEmpty {
+                            let suggestions = Array(addressAutocomplete.results.prefix(5))
+                            VStack(spacing: 0) {
+                                ForEach(Array(suggestions.enumerated()), id: \.offset) { idx, suggestion in
+                                    Button(action: {
+                                        addressAutocomplete.select(suggestion) { result in
+                                            guard let result else { return }
+                                            line1 = result.line1
+                                            city = result.city
+                                            state = result.state
+                                            zip = result.zip
+                                            country = result.country
+                                            showSuggestions = false
+                                        }
+                                    }) {
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(suggestion.title)
+                                                .font(.system(size: 14, weight: .medium))
+                                                .foregroundColor(Color(hex: "2D2D2D"))
+                                                .frame(maxWidth: .infinity, alignment: .leading)
+                                            Text(suggestion.subtitle)
+                                                .font(.system(size: 12))
+                                                .foregroundColor(Color(hex: "8E8E93"))
+                                                .frame(maxWidth: .infinity, alignment: .leading)
+                                        }
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 10)
+                                    }
+                                    .buttonStyle(PlainButtonStyle())
+                                    
+                                    if idx < suggestions.count - 1 {
+                                        Divider().padding(.leading, 12)
+                                    }
                                 }
-                            }) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(suggestion.title)
-                                        .font(.system(size: 14, weight: .medium))
-                                        .foregroundColor(Color(hex: "2D2D2D"))
-                                    Text(suggestion.subtitle)
-                                        .font(.system(size: 12))
-                                        .foregroundColor(Color(hex: "999999"))
-                                }
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 10)
-                                .frame(maxWidth: .infinity, alignment: .leading)
                             }
-                            .background(Color.white)
-                            
-                            if suggestion != addressAutocomplete.results.prefix(5).last {
-                                Divider().padding(.leading, 16)
-                            }
+                            .background(Color(hex: "FFF8FA"))
+                            .cornerRadius(12)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .stroke(Color(hex: "F1DCE4"), lineWidth: 1)
+                            )
+                        }
+                        
+                        ShippingInputField(
+                            label: "Address Line 2 (Optional)",
+                            placeholder: "Apt, suite, etc.",
+                            text: $line2,
+                            icon: "house",
+                            iconColor: Color(hex: "9B6BFF"),
+                            contentType: .streetAddressLine2
+                        )
+                    }
+                    .padding(14)
+                    .background(Color.white)
+                    .cornerRadius(16)
+                    .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 3)
+                    
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Location")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(Color(hex: "666666"))
+                        
+                        HStack(alignment: .top, spacing: 10) {
+                            ShippingInputField(
+                                label: "City",
+                                placeholder: "Los Angeles",
+                                text: $city,
+                                icon: "building.2.fill",
+                                iconColor: Color(hex: "4ECDC4"),
+                                contentType: .addressCity
+                            )
+                            ShippingInputField(
+                                label: "State",
+                                placeholder: "CA",
+                                text: $state,
+                                icon: "flag.fill",
+                                iconColor: Color(hex: "FFB800"),
+                                contentType: .addressState
+                            )
+                        }
+                        
+                        HStack(alignment: .top, spacing: 10) {
+                            ShippingInputField(
+                                label: "ZIP",
+                                placeholder: "90001",
+                                text: $zip,
+                                icon: "number",
+                                iconColor: Color(hex: "FF6B9D"),
+                                contentType: .postalCode,
+                                keyboard: .numbersAndPunctuation,
+                                autocapitalization: .never
+                            )
+                            ShippingInputField(
+                                label: "Country",
+                                placeholder: "United States",
+                                text: $country,
+                                icon: "globe",
+                                iconColor: Color(hex: "888888"),
+                                contentType: .countryName
+                            )
                         }
                     }
+                    .padding(14)
                     .background(Color.white)
-                    .cornerRadius(12)
-                    .shadow(color: Color.black.opacity(0.08), radius: 8, x: 0, y: 4)
-                    .padding(.horizontal, 20)
-                    .padding(.top, 72)
+                    .cornerRadius(16)
+                    .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 3)
                 }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 120)
             }
             
-            Button(action: {
-                onSave()
-                dismiss()
-            }) {
-                HStack(spacing: 10) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 16))
-                    Text("Save Shipping Address")
-                        .font(.system(size: 15, weight: .semibold))
-                }
-                .foregroundColor(.white)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-                .background(
-                    LinearGradient(
-                        colors: [Color(hex: "FF6B9D"), Color(hex: "FFB4C8")],
-                        startPoint: .leading,
-                        endPoint: .trailing
+            VStack(spacing: 8) {
+                Button(action: {
+                    onSave()
+                    dismiss()
+                }) {
+                    HStack(spacing: 10) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 16))
+                        Text("Save Shipping Address")
+                            .font(.system(size: 15, weight: .semibold))
+                    }
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 13)
+                    .background(
+                        LinearGradient(
+                            colors: canSave ? [Color(hex: "FF6B9D"), Color(hex: "FFB4C8")] : [Color(hex: "D8D8D8"), Color(hex: "D8D8D8")],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
                     )
-                )
-                .cornerRadius(12)
+                    .cornerRadius(12)
+                }
+                .buttonStyle(PlainButtonStyle())
+                .disabled(!canSave)
+                
+                if !canSave {
+                    Text("Add all required address fields to continue.")
+                        .font(.system(size: 12))
+                        .foregroundColor(Color(hex: "8E8E93"))
+                }
             }
             .padding(.horizontal, 20)
-            
-            Spacer()
+            .padding(.bottom, 18)
+            .background(
+                LinearGradient(
+                    colors: [Color.clear, Color(hex: "FFF0F5").opacity(0.95)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .ignoresSafeArea(edges: .bottom)
+            )
         }
         .background(PinkDrapeBackground().ignoresSafeArea())
         .onChange(of: line1) { _, newValue in
@@ -1914,6 +2004,48 @@ struct ShippingSettingsSheet: View {
                 showSuggestions = false
             }
         }
+    }
+}
+
+private struct ShippingInputField: View {
+    let label: String
+    let placeholder: String
+    @Binding var text: String
+    let icon: String
+    let iconColor: Color
+    var contentType: UITextContentType? = nil
+    var keyboard: UIKeyboardType = .default
+    var autocapitalization: TextInputAutocapitalization? = .words
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(label)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(Color(hex: "777777"))
+            
+            HStack(spacing: 10) {
+                Image(systemName: icon)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(iconColor)
+                    .frame(width: 18)
+                
+                TextField(placeholder, text: $text)
+                    .font(.system(size: 15))
+                    .foregroundColor(Color(hex: "2D2D2D"))
+                    .textContentType(contentType)
+                    .keyboardType(keyboard)
+                    .textInputAutocapitalization(autocapitalization)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 10)
+            .background(Color(hex: "FFF8FA"))
+            .cornerRadius(10)
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(Color(hex: "F1DCE4"), lineWidth: 1)
+            )
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -1975,6 +2107,12 @@ final class AddressAutocomplete: NSObject, ObservableObject, MKLocalSearchComple
 final class NotificationManager {
     static let shared = NotificationManager()
     
+    enum PreferenceKeys {
+        static let notificationsEnabled = "glowup.notifications.enabled"
+        static let routineReminders = "glowup.notifications.routine"
+        static let photoReminders = "glowup.notifications.photo"
+    }
+    
     enum Ids {
         static let routine = "glowup.routine.reminder"
         static let photo = "glowup.photo.checkin"
@@ -1992,13 +2130,56 @@ final class NotificationManager {
         }
     }
     
+    @discardableResult
+    func syncScheduledNotifications(userId: String?) async -> Bool {
+        let defaults = UserDefaults.standard
+        let notificationsEnabled = defaults.object(forKey: PreferenceKeys.notificationsEnabled) as? Bool ?? true
+        let routineReminders = defaults.object(forKey: PreferenceKeys.routineReminders) as? Bool ?? true
+        let photoReminders = defaults.object(forKey: PreferenceKeys.photoReminders) as? Bool ?? true
+        
+        guard notificationsEnabled else {
+            clearAll()
+            return true
+        }
+        
+        let permissionGranted = await ensureAuthorizationIfNeeded()
+        guard permissionGranted else {
+            clearAll()
+            return false
+        }
+        
+        if routineReminders {
+            try? await scheduleRoutineReminders(userId: userId)
+        } else {
+            clearRoutineReminders()
+        }
+        
+        if photoReminders {
+            scheduleBiweeklyPhotoCheckins()
+        } else {
+            clearBiweeklyPhotoCheckins()
+        }
+        
+        return true
+    }
+    
+    func ensureAuthorizationIfNeeded() async -> Bool {
+        let status = await authorizationStatus()
+        switch status {
+        case .authorized, .provisional:
+            return true
+        case .notDetermined:
+            return await requestAuthorization()
+        case .denied:
+            return false
+        @unknown default:
+            return false
+        }
+    }
+    
     func scheduleRoutineReminders(userId: String?) async throws {
         let center = UNUserNotificationCenter.current()
-        center.removePendingNotificationRequests(withIdentifiers: [
-            Ids.routineMorning,
-            Ids.routineEvening,
-            Ids.exfoliationWeekly
-        ])
+        clearRoutineReminders()
         
         let routineSummary = try await loadRoutineSummary(userId: userId)
         
@@ -2057,7 +2238,8 @@ final class NotificationManager {
     
     func scheduleBiweeklyPhotoCheckins() {
         let center = UNUserNotificationCenter.current()
-        center.removePendingNotificationRequests(withIdentifiers: [Ids.photoBiweekly])
+        let upcomingIds = (0..<6).map { "\(Ids.photoBiweekly)-\($0)" }
+        center.removePendingNotificationRequests(withIdentifiers: upcomingIds)
         
         // Schedule the next 6 biweekly Sundays at 8:00 PM
         let calendar = Calendar.current
@@ -2091,8 +2273,35 @@ final class NotificationManager {
         UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ids)
     }
     
+    func clearRoutineReminders() {
+        clear(ids: [
+            Ids.routineMorning,
+            Ids.routineEvening,
+            Ids.exfoliationWeekly
+        ])
+    }
+    
+    func clearBiweeklyPhotoCheckins() {
+        let center = UNUserNotificationCenter.current()
+        center.getPendingNotificationRequests { requests in
+            let photoIds = requests
+                .map(\.identifier)
+                .filter { $0.hasPrefix(Ids.photoBiweekly) }
+            guard !photoIds.isEmpty else { return }
+            center.removePendingNotificationRequests(withIdentifiers: photoIds)
+        }
+    }
+    
     func clearAll() {
         UNUserNotificationCenter.current().removeAllPendingNotificationRequests()
+    }
+    
+    private func authorizationStatus() async -> UNAuthorizationStatus {
+        await withCheckedContinuation { continuation in
+            UNUserNotificationCenter.current().getNotificationSettings { settings in
+                continuation.resume(returning: settings.authorizationStatus)
+            }
+        }
     }
     
     private func nextSundayEvening(from date: Date) -> Date {

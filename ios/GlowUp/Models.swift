@@ -43,7 +43,7 @@ struct UserProfile: Codable {
     var reminderTime: String = "morning" // morning, evening, both
     var photoCheckIns: Bool = true // Biweekly photo uploads
     
-    // Photos (base64 or URLs)
+    // Photos payload (slot-prefixed data, e.g. "front:data:image/jpeg;base64,...")
     var photos: [String] = []
 }
 

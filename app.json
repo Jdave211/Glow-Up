@@ -1,0 +1,46 @@
+{
+  "name": "glowup-api",
+  "description": "GlowUp backend API (Express + Supabase + OpenAI)",
+  "formation": {
+    "web": {
+      "quantity": 1,
+      "size": "standard-1x"
+    }
+  },
+  "env": {
+    "NODE_ENV": {
+      "value": "production"
+    },
+    "OPENAI_API_KEY": {
+      "required": true
+    },
+    "SUPABASE_URL": {
+      "required": true
+    },
+    "SUPABASE_ANON_KEY": {
+      "required": false
+    },
+    "SUPABASE_SERVICE_ROLE_KEY": {
+      "required": false
+    },
+    "JWT_SECRET": {
+      "required": true
+    },
+    "ROUTINE_SHARE_SECRET": {
+      "required": true
+    },
+    "GLOWUP_CORS_ORIGINS": {
+      "required": false
+    },
+    "GLOWUP_MAX_JSON_BODY": {
+      "value": "20mb",
+      "required": false
+    },
+    "GLOWUP_SHARE_BASE_URL": {
+      "required": false
+    },
+    "GLOWUP_APP_STORE_URL": {
+      "required": false
+    }
+  }
+}

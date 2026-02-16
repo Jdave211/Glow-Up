@@ -6,11 +6,15 @@ struct GlowUpApp: App {
     init() {
         // Show notifications while app is in foreground
         UNUserNotificationCenter.current().delegate = NotificationDelegate.shared
+        _ = SubscriptionManager.shared
     }
 
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .task {
+                    await SubscriptionManager.shared.refreshEntitlements()
+                }
         }
     }
 }
@@ -42,7 +46,6 @@ final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
         completionHandler()
     }
 }
-
 
 
 

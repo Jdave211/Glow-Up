@@ -43,6 +43,9 @@ function buildProfileQuery(profile) {
     const parts = [];
     // Skin description
     parts.push(`Skincare products for ${profile.skinType} skin`);
+    if (profile.detectedSkinTypeFromPhoto && profile.photoAnalysisConfidence && profile.photoAnalysisConfidence >= 0.7) {
+        parts.push(`photo analysis suggests ${profile.detectedSkinTypeFromPhoto} skin`);
+    }
     if (profile.skinGoals && profile.skinGoals.length > 0) {
         const goalDescriptions = {
             'glass_skin': 'achieving glass skin with hydration and glow',
@@ -56,6 +59,15 @@ function buildProfileQuery(profile) {
     }
     if (profile.skinConcerns && profile.skinConcerns.length > 0) {
         parts.push(`for concerns: ${profile.skinConcerns.join(', ')}`);
+    }
+    if (typeof profile.imageHydrationScore === 'number') {
+        parts.push(`hydration score ${profile.imageHydrationScore.toFixed(2)}`);
+    }
+    if (typeof profile.imageOilinessScore === 'number') {
+        parts.push(`oiliness score ${profile.imageOilinessScore.toFixed(2)}`);
+    }
+    if (typeof profile.imageTextureScore === 'number') {
+        parts.push(`texture score ${profile.imageTextureScore.toFixed(2)}`);
     }
     // Skin tone considerations
     if (profile.skinTone !== undefined) {

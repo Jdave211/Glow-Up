@@ -8,11 +8,20 @@ const apple_signin_auth_1 = __importDefault(require("apple-signin-auth"));
 const supabase_1 = require("../db/supabase");
 async function verifyAppleToken(identityToken, fullName) {
     try {
+        const primaryBundleId = (process.env.APPLE_BUNDLE_ID || '').trim();
+        const configuredBundleIds = (process.env.APPLE_BUNDLE_IDS || '')
+            .split(',')
+            .map(id => id.trim())
+            .filter(Boolean);
+        const allowedBundleIds = Array.from(new Set([primaryBundleId, ...configuredBundleIds, 'com.looksmaxx.app', 'com.glowup.app']
+            .map(id => id.trim())
+            .filter(Boolean)));
+        const audience = allowedBundleIds.length === 1 ? allowedBundleIds[0] : allowedBundleIds;
         console.log('🔐 Verifying Apple token...');
-        console.log('   Bundle ID:', process.env.APPLE_BUNDLE_ID || 'NOT SET - using default');
+        console.log('   Allowed Bundle IDs:', allowedBundleIds.join(', '));
         // 1. Verify the identity token with Apple
         const { sub: appleUserId, email } = await apple_signin_auth_1.default.verifyIdToken(identityToken, {
-            audience: process.env.APPLE_BUNDLE_ID || 'com.glowup.app', // Default to com.glowup.app
+            audience,
             ignoreExpiration: true, // For testing, sometimes helpful
         });
         console.log('✅ Token verified. Email:', email);
@@ -45,7 +54,15 @@ async function verifyAppleToken(identityToken, fullName) {
         };
     }
     catch (error) {
-        console.error('Apple Sign In Verification Error:', error);
+        const message = error?.message || String(error);
+        console.error('Apple Sign In Verification Error:', {
+            name: error?.name,
+            message,
+            code: error?.code,
+        });
+        if (message.toLowerCase().includes('audience')) {
+            return { success: false, error: 'Invalid token audience. Check APPLE_BUNDLE_ID/APPLE_BUNDLE_IDS.' };
+        }
         return { success: false, error: 'Invalid token' };
     }
 }

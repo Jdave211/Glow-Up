@@ -2,11 +2,7 @@ import Foundation
 
 class APIService {
     static let shared = APIService()
-<<<<<<< HEAD
     private let baseURL = "https://glowup-15ce3345c8f8.herokuapp.com"
-=======
-    private let baseURL = "http://localhost:4000"
->>>>>>> 39757e8ceedb4e68ba6ad98e49c457179036211c
     
     private init() {}
     

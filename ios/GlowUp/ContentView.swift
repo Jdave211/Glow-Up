@@ -28,7 +28,7 @@ struct ContentView: View {
                 OnboardingView(onComplete: { userId in
                     if let userId = userId {
                         currentUserId = userId
-                        checkServerOnboardedStatus(userId: userId)
+                        resolveSignedInUserLaunchState(userId: userId)
                     } else {
                         withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) {
                             currentScreen = .guestChat
@@ -133,15 +133,10 @@ struct ContentView: View {
     
     private func checkExistingSession() {
         let savedUserId = SessionManager.shared.userId
-        let isOnboarded = SessionManager.shared.isOnboarded
         
         if let userId = savedUserId {
             currentUserId = userId
-            if isOnboarded {
-                loadExistingRoutine(userId: userId)
-            } else {
-                checkOnboardingStatus(userId: userId)
-            }
+            resolveSignedInUserLaunchState(userId: userId)
         } else {
             withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) {
                 currentScreen = .onboarding
@@ -149,91 +144,38 @@ struct ContentView: View {
         }
     }
     
-    // MARK: - Returning user
-    
-    private func loadExistingRoutine(userId: String) {
-        Task {
-            do {
-                if let routine = try await SupabaseService.shared.getLatestRoutine(userId: userId) {
-                    await MainActor.run {
-                        analysisResult = routine
-                        transitionTo(.results)
-                    }
-                } else {
-                    await MainActor.run { transitionTo(.results) }
-                }
-            } catch {
-                await MainActor.run { transitionTo(.results) }
-            }
-        }
-    }
-    
-    // MARK: - Onboarding status
-    
-    private func checkOnboardingStatus(userId: String) {
+    // MARK: - Session routing
+
+    private func resolveSignedInUserLaunchState(userId: String) {
+        let localOnboarded = SessionManager.shared.isOnboarded
         isCheckingOnboarding = true
+
         Task {
-            do {
-                let onboarded = try await SupabaseService.shared.isUserOnboarded(userId: userId)
-                if onboarded {
+            async let onboardedRequest = try? SupabaseService.shared.isUserOnboarded(userId: userId)
+            async let routineRequest = try? SupabaseService.shared.getLatestRoutine(userId: userId)
+
+            let serverOnboarded = await onboardedRequest ?? false
+            let latestRoutine = await routineRequest ?? nil
+
+            await MainActor.run {
+                isCheckingOnboarding = false
+
+                if let routine = latestRoutine {
+                    analysisResult = routine
                     SessionManager.shared.markOnboarded()
-                    if let routine = try await SupabaseService.shared.getLatestRoutine(userId: userId) {
-                        await MainActor.run {
-                            analysisResult = routine
-                            isCheckingOnboarding = false
-                            transitionTo(.results)
-                        }
-                        return
-                    }
-                    await MainActor.run {
-                        isCheckingOnboarding = false
-                        transitionTo(.results)
-                    }
-                } else {
-                    await MainActor.run {
-                        isCheckingOnboarding = false
-                        transitionTo(.intake)
-                    }
+                    transitionTo(.results)
+                    return
                 }
-            } catch {
-                await MainActor.run {
-                    isCheckingOnboarding = false
-                    transitionTo(.intake)
-                }
-            }
-        }
-    }
-    
-    private func checkServerOnboardedStatus(userId: String) {
-        isCheckingOnboarding = true
-        Task {
-            do {
-                let onboarded = try await SupabaseService.shared.isUserOnboarded(userId: userId)
-                if onboarded {
-                    SessionManager.shared.markOnboarded()
-                    if let routine = try await SupabaseService.shared.getLatestRoutine(userId: userId) {
-                        await MainActor.run {
-                            analysisResult = routine
-                            isCheckingOnboarding = false
-                            transitionTo(.results)
-                        }
-                        return
+
+                if serverOnboarded || localOnboarded {
+                    if serverOnboarded {
+                        SessionManager.shared.markOnboarded()
                     }
-                    await MainActor.run {
-                        isCheckingOnboarding = false
-                        transitionTo(.results)
-                    }
-                } else {
-                    await MainActor.run {
-                        isCheckingOnboarding = false
-                        transitionTo(.intake)
-                    }
+                    transitionTo(.results)
+                    return
                 }
-            } catch {
-                await MainActor.run {
-                    isCheckingOnboarding = false
-                    transitionTo(.intake)
-                }
+
+                transitionTo(.intake)
             }
         }
     }

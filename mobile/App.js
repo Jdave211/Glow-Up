@@ -1,9 +1,7 @@
 import { StyleSheet, Text, View, ScrollView, TextInput, TouchableOpacity, ActivityIndicator, SafeAreaView, Switch } from 'react-native';
 import { useState } from 'react';
 
-// Use your computer's IP if testing on real device, or localhost for simulator
-// Android Emulator requires 10.0.2.2 usually
-const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || 'http://localhost:4000';
+const API_BASE_URL = 'https://glowup-15ce3345c8f8.herokuapp.com';
 const API_URL = `${API_BASE_URL}/api/analyze`;
 
 export default function App() {
@@ -362,8 +360,6 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 });
-
-
 
 
 

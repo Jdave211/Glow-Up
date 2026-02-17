@@ -86,9 +86,27 @@ class SupabaseService {
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         
         let (data, response) = try await URLSession.shared.data(for: request)
-        
-        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+
+        guard let httpResponse = response as? HTTPURLResponse else {
             throw APIError.serverError
+        }
+
+        guard httpResponse.statusCode == 200 else {
+            var backendMessage = "Sign in failed (\(httpResponse.statusCode))."
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                if let message = json["error"] as? String, !message.isEmpty {
+                    backendMessage = message
+                } else if let message = json["message"] as? String, !message.isEmpty {
+                    backendMessage = message
+                }
+            } else if let text = String(data: data, encoding: .utf8), !text.isEmpty {
+                backendMessage = text
+            }
+            throw NSError(
+                domain: "GlowUpAuth",
+                code: httpResponse.statusCode,
+                userInfo: [NSLocalizedDescriptionKey: backendMessage]
+            )
         }
         
         struct AuthResponse: Codable {
@@ -96,8 +114,17 @@ class SupabaseService {
             let user: SupabaseUser?
             let error: String?
         }
-        
-        return try JSONDecoder().decode(AuthResponse.self, from: data).user
+
+        let decoded = try JSONDecoder().decode(AuthResponse.self, from: data)
+        if decoded.success == false {
+            throw NSError(
+                domain: "GlowUpAuth",
+                code: httpResponse.statusCode,
+                userInfo: [NSLocalizedDescriptionKey: decoded.error ?? "Authentication failed"]
+            )
+        }
+
+        return decoded.user
     }
     
     // Check if user is onboarded

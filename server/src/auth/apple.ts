@@ -15,7 +15,7 @@ export async function verifyAppleToken(identityToken: string, fullName?: { given
     
     // 1. Verify the identity token with Apple
     const { sub: appleUserId, email } = await appleSignin.verifyIdToken(identityToken, {
-      audience: process.env.APPLE_BUNDLE_ID || 'com.glowup.app', // Default to com.glowup.app
+      audience: process.env.APPLE_BUNDLE_ID || 'com.looksmaxx.app', // Default to com.looksmaxx.app
       ignoreExpiration: true, // For testing, sometimes helpful
     });
     
@@ -59,7 +59,6 @@ export async function verifyAppleToken(identityToken: string, fullName?: { given
     return { success: false, error: 'Invalid token' };
   }
 }
-
 
 
 

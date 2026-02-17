@@ -4,6 +4,8 @@ import AuthenticationServices
 struct OnboardingView: View {
     let onComplete: (_ userId: String?) -> Void
     @State private var currentImageIndex = 0
+    @State private var signInErrorMessage: String?
+    @State private var showSignInError = false
     let timer = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
     
     // Background images
@@ -87,8 +89,8 @@ struct OnboardingView: View {
                             switch result {
                             case .success(let authResults):
                                 handleAuthorization(authResults)
-                            case .failure:
-                                break
+                            case .failure(let error):
+                                showAuthError(error.localizedDescription)
                             }
                         }
                     )
@@ -107,6 +109,11 @@ struct OnboardingView: View {
                 .padding(.bottom, 50)
             }
         }
+        .alert("Sign In Failed", isPresented: $showSignInError) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(signInErrorMessage ?? "We couldn't sign you in right now. Please try again.")
+        }
     }
     
     // Handle Apple Sign In
@@ -114,6 +121,7 @@ struct OnboardingView: View {
         if let appleIDCredential = result.credential as? ASAuthorizationAppleIDCredential {
             guard let identityTokenData = appleIDCredential.identityToken,
                   let identityToken = String(data: identityTokenData, encoding: .utf8) else {
+                showAuthError("Missing Apple identity token. Please try again.")
                 return
             }
             
@@ -128,14 +136,24 @@ struct OnboardingView: View {
                         if user.onboarded == true {
                             SessionManager.shared.markOnboarded()
                         }
+                        await MainActor.run { onComplete(user.id) }
+                    } else {
+                        await MainActor.run {
+                            showAuthError("Sign in succeeded but no user profile was returned.")
+                        }
                     }
-                    
-                    await MainActor.run { onComplete(user?.id) }
                 } catch {
-                    await MainActor.run { onComplete(nil) }
+                    await MainActor.run {
+                        showAuthError(error.localizedDescription)
+                    }
                 }
             }
         }
+    }
+
+    private func showAuthError(_ message: String) {
+        signInErrorMessage = message
+        showSignInError = true
     }
 }
 

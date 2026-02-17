@@ -306,6 +306,8 @@ struct GuestChatView: View {
                 }
                 .padding(.horizontal, 20)
                 .padding(.vertical, 14)
+                .contentShape(Rectangle())
+                .onTapGesture { isInputFocused = false }
 
                 VStack(spacing: 10) {
                     Text("Basic mode: short-context skincare Q&A")
@@ -325,6 +327,8 @@ struct GuestChatView: View {
                 )
                 .padding(.horizontal, 16)
                 .padding(.bottom, 10)
+                .contentShape(Rectangle())
+                .onTapGesture { isInputFocused = false }
 
                 ScrollViewReader { proxy in
                     ScrollView(showsIndicators: false) {
@@ -342,6 +346,9 @@ struct GuestChatView: View {
                         .padding(.horizontal, 20)
                         .padding(.top, 8)
                     }
+                    .scrollDismissesKeyboard(.interactively)
+                    .contentShape(Rectangle())
+                    .onTapGesture { isInputFocused = false }
                     .onChange(of: messages.count) { _, _ in
                         scrollToBottom(proxy)
                     }
@@ -358,6 +365,7 @@ struct GuestChatView: View {
                     HStack(spacing: 10) {
                         TextField("Ask basic skincare questions...", text: $inputText, axis: .vertical)
                             .font(.system(size: 15))
+                            .foregroundColor(Color(hex: "2D2D2D"))
                             .lineLimit(1...5)
                             .focused($isInputFocused)
                             .padding(.horizontal, 16)

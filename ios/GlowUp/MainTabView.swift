@@ -42,6 +42,8 @@ struct MainTabView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .simultaneousGesture(chatTabSwipeGesture)
             
             // Custom Tab Bar
             VStack(spacing: 0) {
@@ -85,7 +87,6 @@ struct MainTabView: View {
                 .background(Color(hex: "FDF6F8"))
             }
         }
-        .ignoresSafeArea(.keyboard)
         .onAppear {
             cartManager.loadCart(userId: SessionManager.shared.userId)
             DeliveryTrackingManager.shared.startPolling(userId: SessionManager.shared.userId)
@@ -101,6 +102,35 @@ struct MainTabView: View {
         }
         .onDisappear {
             DeliveryTrackingManager.shared.stopPolling()
+        }
+    }
+
+    private var chatTabSwipeGesture: some Gesture {
+        DragGesture(minimumDistance: 22, coordinateSpace: .local)
+            .onEnded { value in
+                guard selectedTab == .chat else { return }
+
+                let horizontal = value.translation.width
+                let vertical = value.translation.height
+                guard abs(horizontal) > abs(vertical), abs(horizontal) > 45 else { return }
+
+                if horizontal < 0 {
+                    selectAdjacentTab(offset: 1)
+                } else {
+                    selectAdjacentTab(offset: -1)
+                }
+            }
+    }
+
+    private func selectAdjacentTab(offset: Int) {
+        guard let currentIndex = Tab.allCases.firstIndex(of: selectedTab) else { return }
+        let newIndex = currentIndex + offset
+        guard Tab.allCases.indices.contains(newIndex) else { return }
+
+        let gen = UISelectionFeedbackGenerator()
+        gen.selectionChanged()
+        withAnimation(.easeInOut(duration: 0.15)) {
+            selectedTab = Tab.allCases[newIndex]
         }
     }
 }
@@ -141,8 +171,12 @@ struct ChatView: View {
                 
                 if isEmpty {
                     emptyState
+                        .contentShape(Rectangle())
+                        .onTapGesture { isInputFocused = false }
                 } else {
                     conversationView
+                        .contentShape(Rectangle())
+                        .onTapGesture { isInputFocused = false }
                 }
                 
                 inputBar
@@ -271,6 +305,7 @@ struct ChatView: View {
                 .padding(.horizontal, 20)
                 .padding(.top, 16)
             }
+            .scrollDismissesKeyboard(.interactively)
             .onChange(of: chatSession.currentChat.count) { _, _ in scrollToBottom(proxy) }
             .onChange(of: chatSession.isTyping) { _, _ in if chatSession.isTyping { scrollToBottom(proxy) } }
             .onChange(of: forceScrollToBottomTick) { _, _ in scrollToBottom(proxy) }
@@ -332,6 +367,7 @@ struct ChatView: View {
             HStack(spacing: 10) {
                 TextField("Ask anything...", text: $messageText, axis: .vertical)
                     .font(.system(size: 15))
+                    .foregroundColor(Color(hex: "2D2D2D"))
                     .lineLimit(1...5)
                     .focused($isInputFocused)
                     .padding(.horizontal, 16)

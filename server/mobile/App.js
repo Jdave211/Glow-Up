@@ -3,7 +3,11 @@ import { useState, useEffect, useRef } from 'react';
 import { LinearGradient } from 'expo-linear-gradient';
 
 const { width, height } = Dimensions.get('window');
+<<<<<<< HEAD
 const API_BASE_URL = 'https://glowup-15ce3345c8f8.herokuapp.com';
+=======
+const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || 'http://localhost:4000';
+>>>>>>> 39757e8ceedb4e68ba6ad98e49c457179036211c
 const API_URL = `${API_BASE_URL}/api/analyze`;
 
 // Agent avatars with emojis
@@ -1054,3 +1058,8 @@ const styles = StyleSheet.create({
 
 
 
+<<<<<<< HEAD
+=======
+
+
+>>>>>>> 39757e8ceedb4e68ba6ad98e49c457179036211c

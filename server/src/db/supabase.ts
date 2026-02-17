@@ -1,6 +1,7 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
 // Supabase Configuration
+<<<<<<< HEAD
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseAnonKey = process.env.SUPABASE_ANON_KEY;
 const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -20,6 +21,19 @@ if (!supabaseServiceRoleKey) {
 // Prefer service role for server-side operations, fall back to anon only if absolutely necessary
 const supabaseKey = supabaseServiceRoleKey || supabaseAnonKey!;
 
+=======
+const supabaseUrl = process.env.SUPABASE_URL || 'https://ukhxwxmqjltfjugizbku.supabase.co';
+const supabaseAnonKey =
+  process.env.SUPABASE_ANON_KEY ||
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVraHh3eG1xamx0Zmp1Z2l6Ymt1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njk1NDA2NTUsImV4cCI6MjA4NTExNjY1NX0.x8sfd80Hmb6_wLtBG0Up9OqQZ49wjrhTE_wfdkVnPk4';
+const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const supabaseKey = supabaseServiceRoleKey || supabaseAnonKey;
+
+if (!supabaseServiceRoleKey) {
+  console.warn('⚠️ SUPABASE_SERVICE_ROLE_KEY not set; using anon key fallback for server operations.');
+}
+
+>>>>>>> 39757e8ceedb4e68ba6ad98e49c457179036211c
 export const supabase: SupabaseClient = createClient(supabaseUrl, supabaseKey);
 
 // Database types

@@ -30,13 +30,8 @@ class SupabaseService {
     private let baseURL: String
     
     private init() {
-<<<<<<< HEAD
         // Default to Heroku API (can be swapped later if you add env-based config)
         baseURL = "https://glowup-15ce3345c8f8.herokuapp.com"
-=======
-        // Use local server which connects to Supabase
-        baseURL = "http://localhost:4000"
->>>>>>> 39757e8ceedb4e68ba6ad98e49c457179036211c
     }
     
     // Create or get user

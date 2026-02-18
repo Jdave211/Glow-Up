@@ -1934,7 +1934,10 @@ struct RoutineDetailSheet: View {
     }
 
     private func saveRoutineEdits() {
-        guard !userId.isEmpty else { return }
+        guard !userId.isEmpty else {
+            saveError = "Sign in again to save routine edits."
+            return
+        }
         guard !orderedEditableSteps.isEmpty else { return }
         isSavingRoutine = true
         saveError = nil
@@ -1960,18 +1963,31 @@ struct RoutineDetailSheet: View {
                     summary: "Routine updated from app"
                 )
                 _ = await NotificationManager.shared.syncScheduledNotifications(userId: userId)
-                let response = try await APIService.shared.getTodayCheckins(userId: userId)
+
+                var refreshedCompletedSteps = completedSteps
+                var refreshedStreaks = streaks
+                do {
+                    let response = try await APIService.shared.getTodayCheckins(userId: userId)
+                    refreshedCompletedSteps = Set(response.checkins)
+                    refreshedStreaks = (response.streaks.morning, response.streaks.evening)
+                } catch {
+                    #if DEBUG
+                    print("⚠️ Routine saved but check-ins refresh failed: \(error)")
+                    #endif
+                }
+
                 await MainActor.run {
-                    completedSteps = Set(response.checkins)
-                    streaks = (response.streaks.morning, response.streaks.evening)
+                    completedSteps = refreshedCompletedSteps
+                    streaks = refreshedStreaks
                     isSavingRoutine = false
                     isEditing = false
+                    saveError = nil
                     onRoutineUpdated?()
                 }
             } catch {
                 await MainActor.run {
                     isSavingRoutine = false
-                    saveError = "Couldn't save right now. Please try again."
+                    saveError = error.localizedDescription
                 }
             }
         }

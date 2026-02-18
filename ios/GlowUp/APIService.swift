@@ -440,8 +440,21 @@ class APIService {
         )
         request.httpBody = try JSONEncoder().encode(payload)
 
-        let (_, response) = try await URLSession.shared.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw APIError.serverError
+        }
+        guard httpResponse.statusCode == 200 else {
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let message = json["error"] as? String,
+               !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                throw APIError.serverMessage(message)
+            }
+            if let message = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+               !message.isEmpty {
+                throw APIError.serverMessage(message)
+            }
             throw APIError.serverError
         }
     }
@@ -550,6 +563,7 @@ class APIService {
 enum APIError: Error, LocalizedError {
     case invalidURL
     case serverError
+    case serverMessage(String)
     case decodingError
     case timeout
     
@@ -557,6 +571,7 @@ enum APIError: Error, LocalizedError {
         switch self {
         case .invalidURL: return "Invalid URL"
         case .serverError: return "Server error"
+        case .serverMessage(let message): return message
         case .decodingError: return "Failed to parse response"
         case .timeout: return "Request timed out"
         }

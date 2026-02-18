@@ -12,6 +12,10 @@ final class SubscriptionManager: ObservableObject {
     @Published var errorMessage: String?
 
     private let defaultProductId = "com.glowup.premium"
+    private let fallbackProductIds = [
+        "com.looksmaxx.premium",
+        "com.looksmaxx.app.premium"
+    ]
     private var updatesTask: Task<Void, Never>?
 
     var monthlyProductId: String {
@@ -20,6 +24,17 @@ final class SubscriptionManager: ObservableObject {
             return fromPlist
         }
         return defaultProductId
+    }
+
+    private var candidateProductIds: [String] {
+        var ids: [String] = [monthlyProductId]
+        if !ids.contains(defaultProductId) {
+            ids.append(defaultProductId)
+        }
+        for fallback in fallbackProductIds where !ids.contains(fallback) {
+            ids.append(fallback)
+        }
+        return ids
     }
 
     private init() {
@@ -40,8 +55,17 @@ final class SubscriptionManager: ObservableObject {
         defer { isLoadingProducts = false }
 
         do {
-            let products = try await StoreKit.Product.products(for: [monthlyProductId])
-            monthlyProduct = products.first
+            let ids = candidateProductIds
+            let products = try await StoreKit.Product.products(for: ids)
+            monthlyProduct =
+                products.first(where: { $0.id == monthlyProductId }) ??
+                products.first(where: { $0.id == defaultProductId }) ??
+                products.first
+            if monthlyProduct == nil {
+                errorMessage = "Subscription product unavailable. Verify the App Store product ID."
+                return
+            }
+            errorMessage = nil
         } catch {
             errorMessage = "Unable to load subscription products. Please try again."
         }
@@ -54,7 +78,8 @@ final class SubscriptionManager: ObservableObject {
             await loadProducts()
         }
         guard let product = monthlyProduct else {
-            errorMessage = "Subscription product unavailable right now."
+            let ids = candidateProductIds.joined(separator: ", ")
+            errorMessage = "Subscription product unavailable right now. Configured IDs: \(ids)"
             return false
         }
 
@@ -96,10 +121,11 @@ final class SubscriptionManager: ObservableObject {
 
     func refreshEntitlements() async {
         var hasActivePremium = false
+        let validProductIds = Set(candidateProductIds + [monthlyProduct?.id].compactMap { $0 })
 
         for await verificationResult in Transaction.currentEntitlements {
             guard let transaction = try? checkVerified(verificationResult) else { continue }
-            if transaction.productID == monthlyProductId && transaction.revocationDate == nil {
+            if validProductIds.contains(transaction.productID) && transaction.revocationDate == nil {
                 if let expirationDate = transaction.expirationDate {
                     hasActivePremium = expirationDate > Date()
                 } else {

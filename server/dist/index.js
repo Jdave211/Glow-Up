@@ -1054,9 +1054,7 @@ app.post('/api/routine/update', async (req, res) => {
             return res.status(400).json({ error: 'userId and routine are required' });
         }
         const profile = await supabase_1.DatabaseService.getSkinProfileByUserId(userId);
-        if (!profile) {
-            return res.status(404).json({ error: 'Skin profile not found' });
-        }
+        const latestRoutine = await supabase_1.DatabaseService.getLatestRoutine(userId);
         const resolveProduct = async (step) => {
             if (step?.product_id) {
                 const { data } = await supabase_1.supabase
@@ -1120,10 +1118,16 @@ app.post('/api/routine/update', async (req, res) => {
                 personalized_tips: [],
             },
         };
-        const saved = await supabase_1.DatabaseService.saveRoutine(userId, profile.id, payload);
+        // Prefer current skin profile id when present; for legacy accounts, fall back.
+        // saveRoutine has a built-in FK retry path with null profile_id.
+        const profileIdForSave = profile?.id || latestRoutine?.profile_id || userId;
+        const saved = await supabase_1.DatabaseService.saveRoutine(userId, profileIdForSave, payload);
         if (!saved) {
             return res.status(500).json({ error: 'Failed to save routine' });
         }
+        // Bust per-user cached surfaces so edits are reflected immediately.
+        feedCache.delete(`feed:${userId}`);
+        skinPageCache.delete(`skin-page:${userId}`);
         res.json({ success: true, routine_id: saved.id, routine: payload.inference.routine });
     }
     catch (error) {

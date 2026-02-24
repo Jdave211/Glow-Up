@@ -3,6 +3,7 @@ export interface UserProfileForInference {
     skinTone?: number;
     skinGoals?: string[];
     skinConcerns?: string[];
+    looksmaxConcerns?: string[];
     hairType?: string;
     hairConcerns?: string[];
     washFrequency?: string;

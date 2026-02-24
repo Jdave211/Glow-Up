@@ -22,9 +22,9 @@ struct AnalyzingView: View {
     ]
 
     private let loadingStages = [
-        "Analyzing your profile",
-        "Matching products to your skin needs",
-        "Building your morning and evening routine"
+        "Analyzing your photos + profile",
+        "Scoring where you can improve first",
+        "Building technique and product recommendations"
     ]
 
     private var currentStage: String {
@@ -59,7 +59,7 @@ struct AnalyzingView: View {
                 .scaleEffect(logoScale)
                 
                 VStack(spacing: 12) {
-                    Text("Creating your routine")
+                    Text("Building your glow-up plan")
                         .font(.custom("Didot", size: 32))
                         .fontWeight(.bold)
                         .foregroundColor(Color(hex: "2D2D2D"))

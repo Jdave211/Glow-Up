@@ -270,9 +270,9 @@ struct GuestChatView: View {
         """
         Hi, I’m your GlowUp guest assistant.
 
-        I can answer basic skincare questions with short context, but guest mode does not save chat history.
+        I can answer basic looksmaxing questions (skin-first, plus hair/smile basics) with short context, but guest mode does not save chat history.
 
-        Create an account for personalized routines and progress tracking. GlowUp+ ($1.99/mo) adds enhanced AI help, smart price scouting, free shipping perks, and expanded catalog access.
+        Create an account to upload photos and get a personalized glow-up plan. GlowUp+ ($1.99/mo) adds deeper recommendation quality, objective technique guidance, and stronger product matching.
         """
     }
 
@@ -310,7 +310,7 @@ struct GuestChatView: View {
                 .onTapGesture { isInputFocused = false }
 
                 VStack(spacing: 10) {
-                    Text("Basic mode: short-context skincare Q&A")
+                    Text("Basic mode: short-context looksmaxing Q&A")
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundColor(Color(hex: "7A7A7A"))
                     Text("No saved history in guest mode")
@@ -363,7 +363,7 @@ struct GuestChatView: View {
                 VStack(spacing: 0) {
                     Divider().opacity(0.25)
                     HStack(spacing: 10) {
-                        TextField("Ask basic skincare questions...", text: $inputText, axis: .vertical)
+                        TextField("Ask basic looksmaxing questions...", text: $inputText, axis: .vertical)
                             .font(.system(size: 15))
                             .foregroundColor(Color(hex: "2D2D2D"))
                             .lineLimit(1...5)
@@ -528,7 +528,7 @@ struct GuestChatView: View {
                     }
                 }
             } catch {
-                let fallback = "I’m having trouble connecting right now. Basic skincare starter: gentle cleanser, moisturizer, and SPF 30+ every day. Create an account for personalized help and saved progress."
+                let fallback = "I’m having trouble connecting right now. Quick looksmaxing starter: gentle cleanser, moisturizer, SPF 30+, sleep consistency, and hydration. Create an account for personalized photo-driven guidance."
                 await MainActor.run {
                     withAnimation { isTyping = false }
                     withAnimation(.easeOut(duration: 0.2)) {

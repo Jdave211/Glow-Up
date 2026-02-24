@@ -1,5 +1,4 @@
 import SwiftUI
-import PassKit
 
 // ═══════════════════════════════════════════════════
 // MARK: - CartView (full page)
@@ -7,7 +6,7 @@ import PassKit
 
 struct CartView: View {
     @ObservedObject var cartManager: CartManager
-    @State private var showingCheckout = false
+    @State private var showingShopLinks = false
     @State private var showPaywall = false
     
     var body: some View {
@@ -26,18 +25,6 @@ struct CartView: View {
                                 let pid = item.product.id
                                 CartItemCard(
                                     item: item,
-                                    onIncrement: {
-                                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                                        withAnimation(.easeInOut(duration: 0.15)) {
-                                            cartManager.incrementLocal(productId: pid)
-                                        }
-                                    },
-                                    onDecrement: {
-                                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                                        withAnimation(.easeInOut(duration: 0.15)) {
-                                            cartManager.decrementLocal(productId: pid)
-                                        }
-                                    },
                                     onRemove: {
                                         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                                         withAnimation(.spring(response: 0.35)) {
@@ -62,8 +49,8 @@ struct CartView: View {
                 }
             }
         }
-        .sheet(isPresented: $showingCheckout) {
-            CheckoutView(cartManager: cartManager, total: cartManager.checkoutTotal)
+        .sheet(isPresented: $showingShopLinks) {
+            ShopLinksSheet(items: cartManager.items, subtotal: cartManager.totalPrice)
         }
         .sheet(isPresented: $showPaywall) {
             PremiumPaywallView()
@@ -127,7 +114,7 @@ struct CartView: View {
             if SessionManager.shared.isPremium {
                 HStack(spacing: 6) {
                     Image(systemName: "sparkles.magnifyingglass")
-                    Text("Agent securing best market prices")
+                    Text("Agent compares fit + pricing before you shop")
                 }
                 .font(.system(size: 12, weight: .medium))
                 .foregroundColor(Color(hex: "9B6BFF"))
@@ -141,7 +128,7 @@ struct CartView: View {
                 Button(action: { showPaywall = true }) {
                     HStack(spacing: 6) {
                         Image(systemName: "lock.fill")
-                        Text("Unlock agent price finding & NA free shipping")
+                        Text("Unlock deeper fit scoring + smarter product matching")
                     }
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundColor(Color(hex: "FF6B9D"))
@@ -171,36 +158,30 @@ struct CartView: View {
                     .foregroundColor(Color(hex: "3D3D3D"))
             }
             HStack {
-                Text("GlowUp markup")
+                Text("Price scouting")
                     .font(.system(size: 14))
                     .foregroundColor(Color(hex: "888888"))
                 Spacer()
-                Text("+$\(String(format: "%.2f", cartManager.markupTotal))")
+                Text("Active")
                     .font(.system(size: 14, weight: .medium))
                     .foregroundColor(Color(hex: "3D3D3D"))
             }
             HStack {
-                Text("Shipping")
+                Text("Checkout")
                     .font(.system(size: 14))
                     .foregroundColor(Color(hex: "888888"))
                 Spacer()
-                if cartManager.shippingCost == 0 {
-                    Text("Free (GlowUp+)")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(Color(hex: "4ECDC4"))
-                } else {
-                    Text("$\(String(format: "%.2f", cartManager.shippingCost))")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(Color(hex: "2D2D2D"))
-                }
+                Text("Direct links")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(Color(hex: "2D2D2D"))
             }
             Divider().padding(.vertical, 4)
             HStack {
-                Text("Total")
+                Text("Estimated subtotal")
                     .font(.system(size: 17, weight: .bold))
                     .foregroundColor(Color(hex: "2D2D2D"))
                 Spacer()
-                Text("$\(String(format: "%.2f", cartManager.checkoutTotal))")
+                Text("$\(String(format: "%.2f", cartManager.totalPrice))")
                     .font(.system(size: 20, weight: .bold))
                     .foregroundColor(Color(hex: "FF6B9D"))
             }
@@ -215,11 +196,11 @@ struct CartView: View {
     
     // MARK: Checkout
     private var checkoutButton: some View {
-        Button(action: { showingCheckout = true }) {
+        Button(action: { showingShopLinks = true }) {
             HStack(spacing: 8) {
-                Text("Checkout")
+                Text("Open Purchase Links")
                     .font(.system(size: 17, weight: .semibold))
-                Image(systemName: "arrow.right")
+                Image(systemName: "arrow.up.right.square")
                     .font(.system(size: 14, weight: .semibold))
             }
             .foregroundColor(.white)
@@ -238,15 +219,99 @@ struct CartView: View {
     }
 }
 
+struct ShopLinksSheet: View {
+    let items: [CartItem]
+    let subtotal: Double
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
+
+    private var linkedItems: [CartItem] {
+        items.filter { ($0.product.buy_link ?? "").isEmpty == false }
+    }
+
+    var body: some View {
+        NavigationView {
+            List {
+                Section {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("We find you the best skincare from the best and most affordable spots.")
+                            .font(.system(size: 14, weight: .semibold))
+                        Text("Tap the product links below to buy directly.")
+                            .font(.system(size: 12))
+                            .foregroundColor(Color(hex: "777777"))
+                    }
+                    .padding(.vertical, 4)
+                }
+
+                Section("Products") {
+                    ForEach(items) { item in
+                        HStack(spacing: 10) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(item.product.name)
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .foregroundColor(Color(hex: "2D2D2D"))
+                                Text(item.product.brand)
+                                    .font(.system(size: 12))
+                                    .foregroundColor(Color(hex: "888888"))
+                            }
+                            Spacer()
+                            if let link = item.product.buy_link,
+                               let url = URL(string: link),
+                               !link.isEmpty {
+                                Button("Open") { openURL(url) }
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundColor(Color(hex: "FF6B9D"))
+                            } else {
+                                Text("No link")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(Color(hex: "AAAAAA"))
+                            }
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+
+                Section {
+                    HStack {
+                        Text("Estimated subtotal")
+                        Spacer()
+                        Text("$\(String(format: "%.2f", subtotal))")
+                            .font(.system(size: 14, weight: .bold))
+                    }
+                }
+            }
+            .navigationTitle("Shop Links")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Close") { dismiss() }
+                        .foregroundColor(Color(hex: "FF6B9D"))
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    if linkedItems.count > 1 {
+                        Button("Open All") {
+                            for item in linkedItems {
+                                if let link = item.product.buy_link, let url = URL(string: link) {
+                                    openURL(url)
+                                }
+                            }
+                        }
+                        .foregroundColor(Color(hex: "FF6B9D"))
+                    }
+                }
+            }
+        }
+    }
+}
+
 // ═══════════════════════════════════════════════════
 // MARK: - Cart Item Card
 // ═══════════════════════════════════════════════════
 
 struct CartItemCard: View {
     let item: CartItem
-    let onIncrement: () -> Void
-    let onDecrement: () -> Void
     let onRemove: () -> Void
+    @Environment(\.openURL) private var openURL
     
     var body: some View {
         HStack(spacing: 14) {
@@ -269,44 +334,34 @@ struct CartItemCard: View {
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
                 
-                Text("$\(item.product.price.roundedUpPriceWithMarkup)")
+                Text("$\(item.product.price.roundedUpPrice)")
                     .font(.system(size: 15, weight: .bold))
                     .foregroundColor(Color(hex: "2D2D2D"))
                     .padding(.top, 2)
+
+                if let link = item.product.buy_link,
+                   let url = URL(string: link),
+                   !link.isEmpty {
+                    Button(action: { openURL(url) }) {
+                        Label("Open Link", systemImage: "arrow.up.right.square")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(Color(hex: "FF6B9D"))
+                    }
+                    .buttonStyle(.plain)
+                }
             }
             
             Spacer(minLength: 4)
-            
-            // Qty stepper
-            VStack(spacing: 0) {
-                Button(action: onIncrement) {
-                    Image(systemName: "plus")
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundColor(.white)
-                        .frame(width: 30, height: 30)
-                        .background(Color(hex: "FF6B9D"))
-                        .cornerRadius(8, corners: [.topLeft, .topRight])
-                }
-                
-                Text("\(item.quantity)")
-                    .font(.system(size: 14, weight: .bold, design: .rounded))
-                    .foregroundColor(Color(hex: "2D2D2D"))
-                    .frame(width: 30, height: 28)
-                    .background(Color.white)
-                
-                Button(action: onDecrement) {
-                    Image(systemName: "minus")
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundColor(Color(hex: "666666"))
-                        .frame(width: 30, height: 30)
-                        .background(Color(hex: "F0F0F0"))
-                        .cornerRadius(8, corners: [.bottomLeft, .bottomRight])
-                }
+
+            Button(action: onRemove) {
+                Image(systemName: "trash")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(Color(hex: "FF6B9D"))
+                    .frame(width: 34, height: 34)
+                    .background(Color(hex: "FFF0F5"))
+                    .clipShape(Circle())
             }
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(Color(hex: "EBEBEB"), lineWidth: 1)
-            )
+            .buttonStyle(.plain)
         }
         .padding(14)
         .background(
@@ -355,168 +410,6 @@ struct SummaryRow: View {
             Text(value)
                 .font(.system(size: 14, weight: .medium))
                 .foregroundColor(highlight ? Color(hex: "4ECDC4") : Color(hex: "2D2D2D"))
-        }
-    }
-}
-
-// ═══════════════════════════════════════════════════
-// MARK: - Checkout View
-// ═══════════════════════════════════════════════════
-
-struct CheckoutView: View {
-    @ObservedObject var cartManager: CartManager
-    let total: Double
-    @Environment(\.dismiss) private var dismiss
-    @State private var orderPlaced = false
-    @StateObject private var paymentHandler = PaymentHandler()
-    @State private var isAgentBuying = false
-    @State private var showAddressAlert = false
-    
-    var body: some View {
-        NavigationView {
-            ZStack {
-                PinkDrapeBackground().ignoresSafeArea()
-                
-                if orderPlaced {
-                    orderConfirmationView
-                        .transition(.scale.combined(with: .opacity))
-                } else if isAgentBuying {
-                    agentBuyingView
-                } else {
-                    checkoutFormView
-                }
-            }
-            .navigationTitle("Checkout")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") { dismiss() }
-                        .foregroundColor(Color(hex: "FF6B9D"))
-                }
-            }
-        }
-        .alert("Add a shipping address", isPresented: $showAddressAlert) {
-            Button("Go to Settings") { dismiss() }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Your address isn't set yet. Please add it in Settings → Shipping.")
-        }
-    }
-    
-    private var checkoutFormView: some View {
-        VStack(spacing: 24) {
-            Spacer()
-            
-            VStack(spacing: 16) {
-                HStack {
-                    Text("Total")
-                        .font(.system(size: 18, weight: .bold))
-                    Spacer()
-                    Text("$\(String(format: "%.2f", total))")
-                        .font(.system(size: 22, weight: .bold))
-                        .foregroundColor(Color(hex: "FF6B9D"))
-                }
-            }
-            .padding(24)
-            .background(Color.white.opacity(0.9))
-            .cornerRadius(20)
-            .padding(.horizontal, 24)
-            
-            Spacer()
-            
-            VStack(spacing: 8) {
-                ApplePayButton()
-                    .frame(height: 52)
-                    .onTapGesture { startApplePay() }
-                Text("Pay securely with Apple Pay")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(Color(hex: "999999"))
-            }
-            .padding(.horizontal, 24)
-            .padding(.bottom, 32)
-        }
-    }
-    
-    private var agentBuyingView: some View {
-        VStack(spacing: 28) {
-            Spacer()
-            ProgressView()
-                .scaleEffect(1.5)
-                .tint(Color(hex: "FF6B9D"))
-            
-            Text("Purchasing…")
-                .font(.system(size: 22, weight: .bold))
-                .foregroundColor(Color(hex: "2D2D2D"))
-            
-            Text("Our agent is securing your items\nfrom the best retailers.")
-                .font(.system(size: 15))
-                .foregroundColor(Color(hex: "888888"))
-                .multilineTextAlignment(.center)
-                .lineSpacing(4)
-            Spacer()
-        }
-    }
-    
-    private var orderConfirmationView: some View {
-        VStack(spacing: 28) {
-            Spacer()
-            
-            Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 72))
-                .foregroundColor(Color(hex: "4ECDC4"))
-                .symbolEffect(.bounce, value: orderPlaced)
-            
-            Text("Order Placed!")
-                .font(.system(size: 28, weight: .bold))
-                .foregroundColor(Color(hex: "2D2D2D"))
-            
-            Text("Your glow-up is on the way ✨")
-                .font(.system(size: 15))
-                .foregroundColor(Color(hex: "888888"))
-            
-            Spacer()
-            
-            Button(action: { dismiss() }) {
-                Text("Done")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundColor(Color(hex: "FF6B9D"))
-            }
-            .padding(.bottom, 32)
-        }
-        .padding(.horizontal, 40)
-    }
-    
-    private func startApplePay() {
-        // Flush any pending local qty changes first
-        cartManager.flushPendingChanges()
-        
-        guard SessionManager.shared.hasShippingAddress else {
-            showAddressAlert = true
-            return
-        }
-        let purchasedItems = cartManager.items
-        paymentHandler.startPayment(items: purchasedItems, total: total) { success in
-            if success {
-                withAnimation { isAgentBuying = true }
-                Task {
-                    let userId = SessionManager.shared.userId ?? "guest"
-                    let _ = try? await APIService.shared.createOrder(userId: userId, items: purchasedItems)
-                    
-                    // Integrate each purchased product into the user's routine
-                    for item in purchasedItems {
-                        try? await APIService.shared.integrateProductIntoRoutine(userId: userId, productId: item.product.id)
-                    }
-                    
-                    try? await Task.sleep(nanoseconds: 3 * 1_000_000_000)
-                    await MainActor.run {
-                        withAnimation {
-                            isAgentBuying = false
-                            orderPlaced = true
-                        }
-                        cartManager.clearCart()
-                    }
-                }
-            }
         }
     }
 }

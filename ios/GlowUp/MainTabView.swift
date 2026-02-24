@@ -12,84 +12,42 @@ struct MainTabView: View {
     
     enum Tab: String, CaseIterable {
         case home     = "Home"
-        case chat     = "Chat"
         case skin     = "Skin"
+        case chat     = "Chat"
         case settings = "Settings"
         
         var icon: String {
             switch self {
             case .home:     return "house.fill"
-            case .chat:     return "bubble.left.and.text.bubble.right.fill"
             case .skin:     return "sparkles"
+            case .chat:     return "bubble.left.and.text.bubble.right.fill"
             case .settings: return "gearshape.fill"
             }
         }
     }
     
     var body: some View {
-        ZStack(alignment: .bottom) {
+        Group {
             // Page content - conditional views instead of TabView
-            Group {
-                switch selectedTab {
-                case .home:
-                    HomeView(cartManager: cartManager)
-                case .chat:
-                    ChatView(analysisResult: analysisResult, cartManager: cartManager, chatSession: chatSession)
-                case .skin:
-                    SkinView()
-                case .settings:
-                    SettingsView(onSignOut: onSignOut)
-                }
+            switch selectedTab {
+            case .home:
+                HomeView(cartManager: cartManager)
+            case .chat:
+                ChatView(analysisResult: analysisResult, cartManager: cartManager, chatSession: chatSession)
+            case .skin:
+                SkinView()
+            case .settings:
+                SettingsView(onSignOut: onSignOut)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .contentShape(Rectangle())
-            .simultaneousGesture(chatTabSwipeGesture)
-            
-            // Custom Tab Bar
-            VStack(spacing: 0) {
-                Divider().opacity(0.15)
-                
-                HStack(spacing: 0) {
-                    ForEach(Tab.allCases, id: \.self) { tab in
-                        Button(action: {
-                            let gen = UISelectionFeedbackGenerator()
-                            gen.selectionChanged()
-                            withAnimation(.easeInOut(duration: 0.15)) {
-                                selectedTab = tab
-                            }
-                        }) {
-                            VStack(spacing: 3) {
-                                Image(systemName: tab.icon)
-                                    .font(.system(size: 18))
-                                    .foregroundColor(selectedTab == tab ? Color(hex: "FF6B9D") : Color(hex: "C0C0C0"))
-                                    .overlay(alignment: .topTrailing) {
-                                        if tab == .home && cartManager.itemCount > 0 {
-                                            Text("\(cartManager.itemCount)")
-                                                .font(.system(size: 8, weight: .bold))
-                                                .foregroundColor(.white)
-                                                .frame(width: 14, height: 14)
-                                                .background(Color(hex: "FF6B9D"))
-                                                .clipShape(Circle())
-                                                .offset(x: 8, y: -6)
-                                        }
-                                    }
-                                
-                                Text(tab.rawValue)
-                                    .font(.system(size: 10, weight: .medium))
-                                    .foregroundColor(selectedTab == tab ? Color(hex: "FF6B9D") : Color(hex: "C0C0C0"))
-                            }
-                            .frame(maxWidth: .infinity)
-                            .padding(.top, 8)
-                            .padding(.bottom, 4)
-                        }
-                    }
-                }
-                .background(Color(hex: "FDF6F8"))
-            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .contentShape(Rectangle())
+        .simultaneousGesture(chatTabSwipeGesture)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            tabBar
         }
         .onAppear {
             cartManager.loadCart(userId: SessionManager.shared.userId)
-            DeliveryTrackingManager.shared.startPolling(userId: SessionManager.shared.userId)
             Task {
                 _ = await NotificationManager.shared.syncScheduledNotifications(userId: SessionManager.shared.userId)
             }
@@ -100,8 +58,23 @@ struct MainTabView: View {
                 _ = await NotificationManager.shared.syncScheduledNotifications(userId: SessionManager.shared.userId)
             }
         }
-        .onDisappear {
-            DeliveryTrackingManager.shared.stopPolling()
+        .onReceive(NotificationCenter.default.publisher(for: .glowUpOpenRoutineImport)) { _ in
+            withAnimation(.easeInOut(duration: 0.15)) {
+                selectedTab = .skin
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .glowUpNotificationDestination)) { note in
+            guard let destination = note.userInfo?["destination"] as? String else { return }
+            withAnimation(.easeInOut(duration: 0.15)) {
+                switch destination {
+                case "routine", "progress":
+                    selectedTab = .skin
+                case "delivery_tracking":
+                    selectedTab = .home
+                default:
+                    break
+                }
+            }
         }
     }
 
@@ -133,10 +106,57 @@ struct MainTabView: View {
             selectedTab = Tab.allCases[newIndex]
         }
     }
+
+    private var tabBar: some View {
+        VStack(spacing: 0) {
+            Divider().opacity(0.1)
+
+            HStack(spacing: 0) {
+                ForEach(Tab.allCases, id: \.self) { tab in
+                    Button(action: {
+                        let gen = UISelectionFeedbackGenerator()
+                        gen.selectionChanged()
+                        withAnimation(.easeInOut(duration: 0.15)) {
+                            selectedTab = tab
+                        }
+                    }) {
+                        VStack(spacing: 4) {
+                            Image(systemName: tab.icon)
+                                .font(.system(size: 18, weight: .semibold))
+                                .foregroundColor(selectedTab == tab ? Color(hex: "FF6B9D") : Color(hex: "B6B6BC"))
+                                .overlay(alignment: .topTrailing) {
+                                    if tab == .home && cartManager.itemCount > 0 {
+                                        Text("\(cartManager.itemCount)")
+                                            .font(.system(size: 8, weight: .bold))
+                                            .foregroundColor(.white)
+                                            .frame(width: 14, height: 14)
+                                            .background(Color(hex: "FF6B9D"))
+                                            .clipShape(Circle())
+                                            .offset(x: 8, y: -6)
+                                    }
+                                }
+
+                            Text(tab.rawValue)
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundColor(selectedTab == tab ? Color(hex: "FF6B9D") : Color(hex: "AFAFB5"))
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 46)
+                        .padding(.vertical, 8)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.top, 8)
+            .padding(.bottom, 8)
+        }
+        .background(Color(hex: "F8F2F5"))
+        .frame(maxWidth: .infinity)
+        .ignoresSafeArea(edges: .bottom)
+    }
 }
 
 // ═══════════════════════════════════════════════════
-// MARK: - Chat View (Skincare AI — Hedge-style)
+// MARK: - Chat View (Looksmax AI — skin-first)
 // ═══════════════════════════════════════════════════
 
 final class ChatSession: ObservableObject {
@@ -270,7 +290,7 @@ struct ChatView: View {
                 Text("Start a new chat")
                     .font(.system(size: 22, weight: .semibold))
                     .foregroundColor(Color(hex: "2D2D2D"))
-                Text("Ask GlowUp AI about your skincare routine,\nproduct recommendations, or ingredients.")
+                Text("Ask GlowUp AI what your photos suggest to improve,\nthen get technique + product recommendations.")
                     .font(.system(size: 15))
                     .foregroundColor(Color(hex: "999999"))
                     .multilineTextAlignment(.center)
@@ -442,6 +462,12 @@ struct ChatView: View {
                     userId: userId,
                     conversationId: chatSession.currentConversationId
                 )
+                let didMutateCart = chatResponse.actions.contains {
+                    ($0.tool == "add_to_cart" || $0.tool == "remove_from_cart") && $0.ok
+                }
+                let didMutateRoutine = chatResponse.actions.contains {
+                    ($0.tool == "update_user_routine" && $0.ok) || $0.routineUpdated
+                }
                 
                 // Save AI response to DB (with product metadata for persistence)
                 if let convId = chatSession.currentConversationId {
@@ -479,6 +505,12 @@ struct ChatView: View {
                     withAnimation { chatSession.isTyping = false }
                     let aiMsg = ChatMessage(role: .assistant, content: chatResponse.message, products: chatResponse.products, productMap: chatResponse.productMap)
                     withAnimation(.easeOut(duration: 0.2)) { chatSession.currentChat.append(aiMsg) }
+                    if didMutateCart {
+                        cartManager.loadCart(userId: userId)
+                    }
+                    if didMutateRoutine {
+                        NotificationCenter.default.post(name: .glowUpRoutineDidUpdate, object: nil)
+                    }
                 }
             } catch {
                 #if DEBUG
@@ -1282,7 +1314,7 @@ struct SettingsView: View {
     @AppStorage("glowup.notifications.routine") private var routineReminders = true
     @AppStorage("glowup.notifications.photo") private var photoReminders = true
     @State private var showSignOutAlert = false
-    @State private var showSkincareSheet = false
+    @State private var showLooksSheet = false
     @State private var showShippingSheet = false
     @State private var showPaywall = false
     @State private var showNotificationAlert = false
@@ -1301,95 +1333,116 @@ struct SettingsView: View {
                 // Header
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Settings")
-                        .font(.custom("Didot", size: 30))
+                        .font(.custom("Didot", size: 34))
                         .fontWeight(.bold)
-                        .foregroundColor(Color(hex: "2D2D2D"))
-                    Text("Manage your glow-up essentials")
-                        .font(.system(size: 14))
-                        .foregroundColor(Color(hex: "888888"))
+                        .foregroundColor(Color(hex: "1A1D2B"))
+                    Text("Manage your photo-led glow-up essentials")
+                        .font(.system(size: 15))
+                        .foregroundColor(Color(hex: "8A92A6"))
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 20)
 
                 // Premium Section
-                settingsSection(title: "Membership", subtitle: SessionManager.shared.isPremium ? "Member since today" : "Unlock advanced features") {
+                settingsSection(title: "Membership", subtitle: nil) { // Removed subtitle from section header to reduce clutter
                     Button(action: { showPaywall = true }) {
-                        HStack(spacing: 14) {
+                        HStack(spacing: 16) {
+                            // Icon with glowing effect
                             ZStack {
                                 Circle()
-                                    .fill(LinearGradient(
-                                        colors: [Color(hex: "FF6B9D"), Color(hex: "FFB4C8")],
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing
-                                    ))
-                                    .frame(width: 40, height: 40)
+                                    .fill(
+                                        LinearGradient(
+                                            colors: SessionManager.shared.isPremium ? 
+                                                [Color(hex: "FFD700"), Color(hex: "FFA500")] : 
+                                                [Color(hex: "FF6B9D"), Color(hex: "FF8FB7")],
+                                            startPoint: .topLeading,
+                                            endPoint: .bottomTrailing
+                                        )
+                                    )
+                                    .frame(width: 48, height: 48)
+                                    .shadow(color: (SessionManager.shared.isPremium ? Color.orange : Color(hex: "FF6B9D")).opacity(0.25), radius: 8, x: 0, y: 4)
                                 
-                                Image(systemName: "sparkles")
-                                    .font(.system(size: 18))
+                                Image(systemName: SessionManager.shared.isPremium ? "crown.fill" : "sparkles")
+                                    .font(.system(size: 20, weight: .semibold))
                                     .foregroundColor(.white)
                                     .symbolEffect(.bounce, value: showPaywall)
                             }
                             
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(SessionManager.shared.isPremium ? "GlowUp+" : "Get GlowUp+")
-                                    .font(.system(size: 16, weight: .bold))
-                                    .foregroundColor(Color(hex: "2D2D2D"))
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack(spacing: 6) {
+                                    Text(SessionManager.shared.isPremium ? "GlowUp+ Active" : "Get GlowUp+")
+                                        .font(.system(size: 17, weight: .bold)) // Slightly larger
+                                        .foregroundColor(Color(hex: "1A1D2B"))
+                                    
+                                    if SessionManager.shared.isPremium {
+                                        Image(systemName: "checkmark.seal.fill")
+                                            .font(.system(size: 14))
+                                            .foregroundColor(Color(hex: "FFD700"))
+                                    }
+                                }
                                 
-                                Text(SessionManager.shared.isPremium ? "Active • Manage subscription" : "Free shipping & advanced AI")
-                                    .font(.system(size: 13))
-                                    .foregroundColor(Color(hex: "888888"))
+                                Text(SessionManager.shared.isPremium ? "Manage subscription" : "Unlock unlimited analysis & matches")
+                                    .font(.system(size: 13, weight: .medium))
+                                    .foregroundColor(Color(hex: "8A92A6"))
+                                    .lineLimit(1)
                             }
                             
                             Spacer()
                             
                             if !SessionManager.shared.isPremium {
                                 Text("UPGRADE")
-                                    .font(.system(size: 10, weight: .bold))
+                                    .font(.system(size: 11, weight: .heavy))
                                     .foregroundColor(.white)
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 4)
-                                    .background(Color(hex: "FF6B9D"))
-                                    .cornerRadius(6)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 6)
+                                    .background(
+                                        Capsule()
+                                            .fill(Color(hex: "FF6B9D"))
+                                            .shadow(color: Color(hex: "FF6B9D").opacity(0.3), radius: 4, x: 0, y: 2)
+                                    )
+                            } else {
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .foregroundColor(Color(hex: "C4C4C4"))
                             }
-                            
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 13))
-                                .foregroundColor(Color(hex: "CCCCCC"))
                         }
+                        .padding(.vertical, 4) // Add internal breathing room
                     }
                 }
 
                 
                 // Account Section
-                settingsSection(title: "Account", subtitle: "Your GlowUp identity") {
+                settingsSection(title: "Account", subtitle: "Your profile") {
                     // Profile row
                     HStack(spacing: 16) {
-                        Circle()
-                            .fill(LinearGradient(
-                                colors: [Color(hex: "FF6B9D"), Color(hex: "FFB4C8")],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            ))
-                            .frame(width: 50, height: 50)
-                            .overlay(
-                                Text(String((SessionManager.shared.userName ?? "G").prefix(1)).uppercased())
-                                    .font(.system(size: 20, weight: .bold))
-                                    .foregroundColor(.white)
-                            )
+                        ZStack {
+                            Circle()
+                                .fill(LinearGradient(
+                                    colors: [Color(hex: "FF6B9D"), Color(hex: "FFB4C8")],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                ))
+                                .frame(width: 56, height: 56) // Larger avatar
+                                .shadow(color: Color(hex: "FF6B9D").opacity(0.25), radius: 6, x: 0, y: 3)
+                            
+                            Text(String((SessionManager.shared.userName ?? "G").prefix(1)).uppercased())
+                                .font(.system(size: 22, weight: .bold))
+                                .foregroundColor(.white)
+                        }
                         
-                        VStack(alignment: .leading, spacing: 3) {
+                        VStack(alignment: .leading, spacing: 4) {
                             Text(SessionManager.shared.userName ?? "User")
-                                .font(.system(size: 16, weight: .semibold))
-                                .foregroundColor(Color(hex: "2D2D2D"))
+                                .font(.system(size: 17, weight: .semibold))
+                                .foregroundColor(Color(hex: "1A1D2B"))
                             
                             Text(SessionManager.shared.userEmail ?? "Not signed in")
-                                .font(.system(size: 13))
-                                .foregroundColor(Color(hex: "888888"))
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundColor(Color(hex: "8A92A6"))
                         }
                         
                         Spacer()
                     }
-                    .padding(.vertical, 4)
+                    .padding(.vertical, 8)
                 }
                 
                 // Notifications Section
@@ -1424,19 +1477,19 @@ struct SettingsView: View {
                     }
                 }
                 
-                // Skincare Section
-                settingsSection(title: "Skincare", subtitle: "Tune your routine and insights") {
+                // Looks Section
+                settingsSection(title: "Looks", subtitle: "Tune your photo-led plan and insights") {
                     SettingsRow(
                         icon: "sparkles",
                         iconColor: Color(hex: "FF6B9D"),
-                        title: "Manage Skincare",
-                        subtitle: "Profile, routine, insights",
-                        action: { showSkincareSheet = true }
+                        title: "Manage Looks Plan",
+                        subtitle: "Photos, profile, routine, insights",
+                        action: { showLooksSheet = true }
                     )
                 }
 
                 // Shipping Section
-                settingsSection(title: "Shipping", subtitle: "Used for one-tap buy") {
+                settingsSection(title: "Shipping", subtitle: "Used to prefill retailer checkout forms") {
                     SettingsRow(
                         icon: "shippingbox.fill",
                         iconColor: Color(hex: "9B6BFF"),
@@ -1473,21 +1526,27 @@ struct SettingsView: View {
                 
                 // Sign Out
                 Button(action: { showSignOutAlert = true }) {
-                    HStack(spacing: 10) {
-                        Image(systemName: "rectangle.portrait.and.arrow.right")
-                            .font(.system(size: 16))
+                    HStack(spacing: 16) {
+                        ZStack {
+                            Circle()
+                                .fill(Color(hex: "FFF0F0"))
+                                .frame(width: 36, height: 36)
+                            
+                            Image(systemName: "rectangle.portrait.and.arrow.right")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundColor(Color(hex: "FF6B6B"))
+                        }
+                        
                         Text("Sign Out")
                             .font(.system(size: 16, weight: .semibold))
+                            .foregroundColor(Color(hex: "FF6B6B"))
+                        
+                        Spacer()
                     }
-                    .foregroundColor(Color(hex: "FF6B6B"))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
+                    .padding(16)
                     .background(Color.white)
-                    .cornerRadius(16)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 16)
-                            .stroke(Color(hex: "FFD1DC"), lineWidth: 1)
-                    )
+                    .cornerRadius(20)
+                    .shadow(color: Color.black.opacity(0.06), radius: 10, x: 0, y: 4)
                 }
                 .padding(.horizontal, 20)
                 
@@ -1526,7 +1585,7 @@ struct SettingsView: View {
         .sheet(isPresented: $showPaywall) {
             PremiumPaywallView()
         }
-        .sheet(isPresented: $showSkincareSheet) {
+        .sheet(isPresented: $showLooksSheet) {
             SkincareSettingsSheet()
                 .presentationDetents([.medium, .large])
         }
@@ -1547,15 +1606,15 @@ struct SettingsView: View {
     
     // MARK: - Section Builder
     private func settingsSection<Content: View>(title: String, subtitle: String? = nil, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
                 Text(title)
-                    .font(.system(size: 15, weight: .bold))
-                    .foregroundColor(Color(hex: "2D2D2D"))
+                    .font(.system(size: 16, weight: .bold)) // Slightly larger
+                    .foregroundColor(Color(hex: "1A1D2B"))
                 if let subtitle {
                     Text(subtitle)
-                        .font(.system(size: 12))
-                        .foregroundColor(Color(hex: "9A9A9A"))
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(Color(hex: "8A92A6"))
                 }
             }
             .padding(.horizontal, 24)
@@ -1563,11 +1622,10 @@ struct SettingsView: View {
             VStack(spacing: 0) {
                 content()
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
+            .padding(16) // Simplified padding
             .background(Color.white)
-            .cornerRadius(16)
-            .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 3)
+            .cornerRadius(20) // Softer corners
+            .shadow(color: Color.black.opacity(0.06), radius: 10, x: 0, y: 4) // Slightly deeper shadow
             .padding(.horizontal, 20)
         }
     }
@@ -1673,20 +1731,25 @@ struct SettingsToggle: View {
     @Binding var isOn: Bool
     
     var body: some View {
-        HStack(spacing: 14) {
-            Image(systemName: icon)
-                .font(.system(size: 18))
-                .foregroundColor(iconColor)
-                .frame(width: 30)
+        HStack(spacing: 16) {
+            ZStack {
+                Circle()
+                    .fill(iconColor.opacity(0.1))
+                    .frame(width: 36, height: 36)
+                
+                Image(systemName: icon)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(iconColor)
+            }
             
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 3) {
                 Text(title)
-                    .font(.system(size: 15))
-                    .foregroundColor(Color(hex: "2D2D2D"))
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundColor(Color(hex: "1A1D2B"))
                 if let subtitle {
                     Text(subtitle)
                         .font(.system(size: 12))
-                        .foregroundColor(Color(hex: "AAAAAA"))
+                        .foregroundColor(Color(hex: "8A92A6"))
                 }
             }
             
@@ -1696,6 +1759,7 @@ struct SettingsToggle: View {
                 .tint(Color(hex: "FF6B9D"))
                 .labelsHidden()
         }
+        .padding(.vertical, 4)
     }
 }
 
@@ -1708,29 +1772,35 @@ struct SettingsRow: View {
     
     var body: some View {
         Button(action: { action?() }) {
-            HStack(spacing: 14) {
-                Image(systemName: icon)
-                    .font(.system(size: 18))
-                    .foregroundColor(iconColor)
-                    .frame(width: 30)
+            HStack(spacing: 16) {
+                ZStack {
+                    Circle()
+                        .fill(iconColor.opacity(0.1))
+                        .frame(width: 36, height: 36)
+                    
+                    Image(systemName: icon)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(iconColor)
+                }
                 
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 3) {
                     Text(title)
                         .font(.system(size: 15, weight: .medium))
-                        .foregroundColor(Color(hex: "2D2D2D"))
+                        .foregroundColor(Color(hex: "1A1D2B"))
                     if let subtitle {
                         Text(subtitle)
                             .font(.system(size: 12))
-                            .foregroundColor(Color(hex: "999999"))
+                            .foregroundColor(Color(hex: "8A92A6"))
                     }
                 }
                 
                 Spacer()
                 
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 13))
-                    .foregroundColor(Color(hex: "CCCCCC"))
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(Color(hex: "D1D1D6"))
             }
+            .padding(.vertical, 4)
         }
     }
 }
@@ -1745,19 +1815,25 @@ struct SettingsTextField: View {
     var autocapitalization: TextInputAutocapitalization? = .words
     
     var body: some View {
-        HStack(spacing: 14) {
-            Image(systemName: icon)
-                .font(.system(size: 18))
-                .foregroundColor(iconColor)
-                .frame(width: 30)
+        HStack(spacing: 16) {
+            ZStack {
+                Circle()
+                    .fill(iconColor.opacity(0.1))
+                    .frame(width: 36, height: 36)
+                
+                Image(systemName: icon)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(iconColor)
+            }
             
             TextField(title, text: $text)
                 .font(.system(size: 15))
-                .foregroundColor(Color(hex: "2D2D2D"))
+                .foregroundColor(Color(hex: "1A1D2B"))
                 .textContentType(contentType)
                 .keyboardType(keyboard)
                 .textInputAutocapitalization(autocapitalization)
         }
+        .padding(.vertical, 4)
     }
 }
 
@@ -1766,31 +1842,35 @@ struct SkincareSettingsSheet: View {
     @Environment(\.dismiss) private var dismiss
     
     var body: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 20) {
             HStack {
-                Text("Skincare")
-                    .font(.custom("Didot", size: 26))
+                Text("Routine Management")
+                    .font(.custom("Didot", size: 28))
                     .fontWeight(.bold)
-                    .foregroundColor(Color(hex: "2D2D2D"))
+                    .foregroundColor(Color(hex: "1A1D2B"))
                 Spacer()
-                Button("Done") { dismiss() }
-                    .foregroundColor(Color(hex: "FF6B9D"))
+                Button(action: { dismiss() }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 24))
+                        .foregroundColor(Color(hex: "E5E7EB"))
+                        .symbolRenderingMode(.hierarchical)
+                        .foregroundStyle(Color(hex: "8A92A6"))
+                }
             }
-            .padding(.horizontal, 20)
-            .padding(.top, 12)
+            .padding(.horizontal, 24)
+            .padding(.top, 20)
             
             VStack(spacing: 0) {
                 SettingsRow(icon: "arrow.clockwise", iconColor: Color(hex: "FFB800"), title: "Re-run Analysis", subtitle: "Refresh your routine")
-                Divider().padding(.leading, 44)
+                Divider().padding(.leading, 52).opacity(0.6)
                 SettingsRow(icon: "pencil", iconColor: Color(hex: "FF6B9D"), title: "Edit Skin Profile", subtitle: "Update goals and concerns")
-                Divider().padding(.leading, 44)
+                Divider().padding(.leading, 52).opacity(0.6)
                 SettingsRow(icon: "trash", iconColor: Color(hex: "FF6B6B"), title: "Clear Saved Routine", subtitle: "Start fresh anytime")
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
+            .padding(16)
             .background(Color.white)
-            .cornerRadius(16)
-            .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 3)
+            .cornerRadius(20)
+            .shadow(color: Color.black.opacity(0.06), radius: 10, x: 0, y: 4)
             .padding(.horizontal, 20)
             
             Spacer()
@@ -1825,28 +1905,34 @@ struct ShippingSettingsSheet: View {
     var body: some View {
         ZStack(alignment: .bottom) {
             ScrollView(showsIndicators: false) {
-                VStack(spacing: 18) {
+                VStack(spacing: 24) {
                     HStack {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Shipping")
-                                .font(.custom("Didot", size: 28))
+                                .font(.custom("Didot", size: 32))
                                 .fontWeight(.bold)
-                                .foregroundColor(Color(hex: "2D2D2D"))
-                            Text("Used for one-tap checkout and delivery updates.")
-                                .font(.system(size: 13))
-                                .foregroundColor(Color(hex: "8E8E93"))
+                                .foregroundColor(Color(hex: "1A1D2B"))
+                            Text("Used to prefill your saved details")
+                                .font(.system(size: 14))
+                                .foregroundColor(Color(hex: "8A92A6"))
                         }
                         Spacer()
-                        Button("Done") { dismiss() }
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundColor(Color(hex: "FF6B9D"))
+                        Button(action: { dismiss() }) {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 26))
+                                .foregroundColor(Color(hex: "E5E7EB"))
+                                .symbolRenderingMode(.hierarchical)
+                                .foregroundStyle(Color(hex: "8A92A6"))
+                        }
                     }
-                    .padding(.top, 8)
+                    .padding(.top, 24)
                     
-                    VStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 14) {
                         Text("Contact")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundColor(Color(hex: "666666"))
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundColor(Color(hex: "8A92A6"))
+                            .textCase(.uppercase)
+                            .padding(.leading, 4)
                         
                         ShippingInputField(
                             label: "Full Name",
@@ -1857,15 +1943,17 @@ struct ShippingSettingsSheet: View {
                             contentType: .name
                         )
                     }
-                    .padding(14)
+                    .padding(16)
                     .background(Color.white)
-                    .cornerRadius(16)
-                    .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 3)
+                    .cornerRadius(20)
+                    .shadow(color: Color.black.opacity(0.06), radius: 10, x: 0, y: 4)
                     
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Street Address")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundColor(Color(hex: "666666"))
+                    VStack(alignment: .leading, spacing: 14) {
+                        Text("Address")
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundColor(Color(hex: "8A92A6"))
+                            .textCase(.uppercase)
+                            .padding(.leading, 4)
                         
                         ShippingInputField(
                             label: "Address Line 1",
@@ -1894,15 +1982,15 @@ struct ShippingSettingsSheet: View {
                                         VStack(alignment: .leading, spacing: 2) {
                                             Text(suggestion.title)
                                                 .font(.system(size: 14, weight: .medium))
-                                                .foregroundColor(Color(hex: "2D2D2D"))
+                                                .foregroundColor(Color(hex: "1A1D2B"))
                                                 .frame(maxWidth: .infinity, alignment: .leading)
                                             Text(suggestion.subtitle)
                                                 .font(.system(size: 12))
-                                                .foregroundColor(Color(hex: "8E8E93"))
+                                                .foregroundColor(Color(hex: "8A92A6"))
                                                 .frame(maxWidth: .infinity, alignment: .leading)
                                         }
                                         .padding(.horizontal, 12)
-                                        .padding(.vertical, 10)
+                                        .padding(.vertical, 12)
                                     }
                                     .buttonStyle(PlainButtonStyle())
                                     
@@ -1915,7 +2003,7 @@ struct ShippingSettingsSheet: View {
                             .cornerRadius(12)
                             .overlay(
                                 RoundedRectangle(cornerRadius: 12)
-                                    .stroke(Color(hex: "F1DCE4"), lineWidth: 1)
+                                    .stroke(Color(hex: "FFD1DC"), lineWidth: 1)
                             )
                         }
                         
@@ -1928,17 +2016,19 @@ struct ShippingSettingsSheet: View {
                             contentType: .streetAddressLine2
                         )
                     }
-                    .padding(14)
+                    .padding(16)
                     .background(Color.white)
-                    .cornerRadius(16)
-                    .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 3)
+                    .cornerRadius(20)
+                    .shadow(color: Color.black.opacity(0.06), radius: 10, x: 0, y: 4)
                     
-                    VStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 14) {
                         Text("Location")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundColor(Color(hex: "666666"))
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundColor(Color(hex: "8A92A6"))
+                            .textCase(.uppercase)
+                            .padding(.leading, 4)
                         
-                        HStack(alignment: .top, spacing: 10) {
+                        HStack(alignment: .top, spacing: 12) {
                             ShippingInputField(
                                 label: "City",
                                 placeholder: "Los Angeles",
@@ -1957,7 +2047,7 @@ struct ShippingSettingsSheet: View {
                             )
                         }
                         
-                        HStack(alignment: .top, spacing: 10) {
+                        HStack(alignment: .top, spacing: 12) {
                             ShippingInputField(
                                 label: "ZIP",
                                 placeholder: "90001",
@@ -1973,15 +2063,15 @@ struct ShippingSettingsSheet: View {
                                 placeholder: "United States",
                                 text: $country,
                                 icon: "globe",
-                                iconColor: Color(hex: "888888"),
+                                iconColor: Color(hex: "8A92A6"),
                                 contentType: .countryName
                             )
                         }
                     }
-                    .padding(14)
+                    .padding(16)
                     .background(Color.white)
-                    .cornerRadius(16)
-                    .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 3)
+                    .cornerRadius(20)
+                    .shadow(color: Color.black.opacity(0.06), radius: 10, x: 0, y: 4)
                 }
                 .padding(.horizontal, 20)
                 .padding(.bottom, 120)
@@ -1994,36 +2084,37 @@ struct ShippingSettingsSheet: View {
                 }) {
                     HStack(spacing: 10) {
                         Image(systemName: "checkmark.circle.fill")
-                            .font(.system(size: 16))
-                        Text("Save Shipping Address")
-                            .font(.system(size: 15, weight: .semibold))
+                            .font(.system(size: 18))
+                        Text("Save Details")
+                            .font(.system(size: 16, weight: .bold))
                     }
                     .foregroundColor(.white)
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 13)
+                    .padding(.vertical, 16)
                     .background(
                         LinearGradient(
-                            colors: canSave ? [Color(hex: "FF6B9D"), Color(hex: "FFB4C8")] : [Color(hex: "D8D8D8"), Color(hex: "D8D8D8")],
+                            colors: canSave ? [Color(hex: "FF6B9D"), Color(hex: "FF8FB7")] : [Color(hex: "E5E7EB"), Color(hex: "E5E7EB")],
                             startPoint: .leading,
                             endPoint: .trailing
                         )
                     )
-                    .cornerRadius(12)
+                    .cornerRadius(16)
+                    .shadow(color: canSave ? Color(hex: "FF6B9D").opacity(0.3) : .clear, radius: 8, x: 0, y: 4)
                 }
                 .buttonStyle(PlainButtonStyle())
                 .disabled(!canSave)
                 
                 if !canSave {
-                    Text("Add all required address fields to continue.")
-                        .font(.system(size: 12))
-                        .foregroundColor(Color(hex: "8E8E93"))
+                    Text("Please fill in all required fields")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(Color(hex: "8A92A6"))
                 }
             }
             .padding(.horizontal, 20)
             .padding(.bottom, 18)
             .background(
                 LinearGradient(
-                    colors: [Color.clear, Color(hex: "FFF0F5").opacity(0.95)],
+                    colors: [Color.clear, Color(hex: "FFF0F5").opacity(0.98)],
                     startPoint: .top,
                     endPoint: .bottom
                 )
@@ -2057,28 +2148,33 @@ private struct ShippingInputField: View {
         VStack(alignment: .leading, spacing: 6) {
             Text(label)
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundColor(Color(hex: "777777"))
+                .foregroundColor(Color(hex: "8A92A6"))
             
-            HStack(spacing: 10) {
-                Image(systemName: icon)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(iconColor)
-                    .frame(width: 18)
+            HStack(spacing: 12) {
+                ZStack {
+                    Circle()
+                        .fill(iconColor.opacity(0.1))
+                        .frame(width: 32, height: 32)
+                    
+                    Image(systemName: icon)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(iconColor)
+                }
                 
                 TextField(placeholder, text: $text)
                     .font(.system(size: 15))
-                    .foregroundColor(Color(hex: "2D2D2D"))
+                    .foregroundColor(Color(hex: "1A1D2B"))
                     .textContentType(contentType)
                     .keyboardType(keyboard)
                     .textInputAutocapitalization(autocapitalization)
             }
-            .padding(.horizontal, 10)
+            .padding(.horizontal, 12)
             .padding(.vertical, 10)
-            .background(Color(hex: "FFF8FA"))
-            .cornerRadius(10)
+            .background(Color(hex: "F9FAFB"))
+            .cornerRadius(12)
             .overlay(
-                RoundedRectangle(cornerRadius: 10)
-                    .stroke(Color(hex: "F1DCE4"), lineWidth: 1)
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(Color(hex: "E5E7EB"), lineWidth: 1)
             )
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -2202,7 +2298,7 @@ final class NotificationManager {
     func ensureAuthorizationIfNeeded() async -> Bool {
         let status = await authorizationStatus()
         switch status {
-        case .authorized, .provisional:
+        case .authorized, .provisional, .ephemeral:
             return true
         case .notDetermined:
             return await requestAuthorization()
@@ -2463,21 +2559,6 @@ final class CartManager: ObservableObject {
 
     var totalPrice: Double {
         store.values.reduce(0) { $0 + ($1.product.price * Double($1.quantity)) }
-    }
-    
-    /// $1 markup per product unit (app-side only).
-    var markupTotal: Double {
-        store.values.reduce(0) { $0 + (Double($1.quantity) * Double.appUnitMarkup) }
-    }
-    
-    /// What user pays in app/Apple Pay (DB prices untouched).
-    var checkoutTotal: Double {
-        totalPrice + markupTotal + shippingCost
-    }
-    
-    /// Shipping cost based on premium status
-    var shippingCost: Double {
-        SessionManager.shared.isPremium ? 0.00 : 5.99
     }
 
     var itemCount: Int {

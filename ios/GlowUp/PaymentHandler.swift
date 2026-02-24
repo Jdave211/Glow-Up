@@ -28,12 +28,6 @@ class PaymentHandler: NSObject, ObservableObject {
             )
         }
         
-        // App-only markup: $1 per product unit (not persisted in DB prices)
-        let totalUnits = items.reduce(0) { $0 + $1.quantity }
-        let markupAmount = Double(totalUnits) * Double.appUnitMarkup
-        let markup = PKPaymentSummaryItem(label: "GlowUp markup", amount: NSDecimalNumber(value: markupAmount))
-        summaryItems.append(markup)
-        
         // Total
         let totalAmount = NSDecimalNumber(value: total)
         summaryItems.append(PKPaymentSummaryItem(label: "GlowUp Total", amount: totalAmount))
@@ -87,6 +81,5 @@ struct ApplePayButton: UIViewRepresentable {
 
 // MARK: - Update Cart View Logic
 // (I will update the CheckoutView in CartView.swift directly via search_replace)
-
 
 

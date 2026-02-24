@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		4471508D2F4E11D30055B437 /* StoreKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4471508C2F4E11D30055B437 /* StoreKit.framework */; };
 		447E94382F3E977B00908C30 /* PremiumPaywallView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 447E94372F3E977B00908C30 /* PremiumPaywallView.swift */; };
 		A1000001 /* GlowUpApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000001 /* GlowUpApp.swift */; };
 		A1000002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000002 /* ContentView.swift */; };
@@ -28,6 +29,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		4471508C2F4E11D30055B437 /* StoreKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = StoreKit.framework; path = System/Library/Frameworks/StoreKit.framework; sourceTree = SDKROOT; };
 		447E94372F3E977B00908C30 /* PremiumPaywallView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PremiumPaywallView.swift; sourceTree = "<group>"; };
 		A2000001 /* GlowUpApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlowUpApp.swift; sourceTree = "<group>"; };
 		A2000002 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
@@ -55,16 +57,26 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				4471508D2F4E11D30055B437 /* StoreKit.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		4471508B2F4E11D30055B437 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				4471508C2F4E11D30055B437 /* StoreKit.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
 		A5000001 = {
 			isa = PBXGroup;
 			children = (
 				A5000002 /* GlowUp */,
+				4471508B2F4E11D30055B437 /* Frameworks */,
 				A5000003 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -327,9 +339,11 @@
 				"DEVELOPMENT_TEAM[sdk=iphoneos*]" = U8FPZXV6X6;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleURLTypes = "{\n    CFBundleURLName = \"com.looksmaxx.app\";\n    CFBundleURLSchemes =     (\n        glowup\n    );\n}";
 				INFOPLIST_KEY_NSCameraUsageDescription = "GlowUp uses the camera to capture progress photos for your skincare journey.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "GlowUp uses your photo library so you can select onboarding and progress photos.";
-				INFOPLIST_KEY_PREMIUM_MONTHLY_PRODUCT_ID = com.glowup.premium;
+				INFOPLIST_KEY_PREMIUM_MONTHLY_PRODUCT_ID = com.glowup.premium.month;
+				INFOPLIST_KEY_PREMIUM_WEEKLY_PRODUCT_ID = com.glowup.premium.weekly;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -364,9 +378,11 @@
 				"DEVELOPMENT_TEAM[sdk=iphoneos*]" = U8FPZXV6X6;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleURLTypes = "{\n    CFBundleURLName = \"com.looksmaxx.app\";\n    CFBundleURLSchemes =     (\n        glowup\n    );\n}";
 				INFOPLIST_KEY_NSCameraUsageDescription = "GlowUp uses the camera to capture progress photos for your skincare journey.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "GlowUp uses your photo library so you can select onboarding and progress photos.";
-				INFOPLIST_KEY_PREMIUM_MONTHLY_PRODUCT_ID = com.glowup.premium;
+				INFOPLIST_KEY_PREMIUM_MONTHLY_PRODUCT_ID = com.glowup.premium.month;
+				INFOPLIST_KEY_PREMIUM_WEEKLY_PRODUCT_ID = com.glowup.premium.weekly;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;

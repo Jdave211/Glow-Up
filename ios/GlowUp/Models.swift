@@ -2,22 +2,9 @@ import Foundation
 
 // MARK: - Price Formatting Extension
 extension Double {
-    /// App-only markup per product unit (not persisted to DB prices).
-    static let appUnitMarkup: Double = 1.0
-    
     /// Rounds up the price to the nearest whole number
     var roundedUpPrice: Int {
         return Int(ceil(self))
-    }
-    
-    /// Adds the app markup for one unit.
-    var withAppMarkup: Double {
-        self + Double.appUnitMarkup
-    }
-    
-    /// Price + app markup, then rounded up for display labels.
-    var roundedUpPriceWithMarkup: Int {
-        Int(ceil(withAppMarkup))
     }
 }
 
@@ -89,9 +76,17 @@ extension UserProfile {
             "oily_scalp": "oily_scalp",
             "dry_scalp": "dry_scalp",
             "thinning": "thinning",
+            "hair_thinning": "thinning",
             "color_damage": "color_damage",
             "heat_damage": "heat_damage",
-            "scalp_sensitivity": "scalp_sensitivity"
+            "scalp_sensitivity": "scalp_sensitivity",
+            "under_eye_bags": "eye_bags",
+            "eye_bags": "eye_bags",
+            "teeth_staining": "teeth_staining",
+            "yellow_teeth": "teeth_staining",
+            "facial_bloating": "bloating",
+            "bloating": "bloating",
+            "jawline": "jawline_definition"
         ]
 
         let goalMap: [String: String] = [

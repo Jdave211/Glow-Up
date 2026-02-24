@@ -117,6 +117,12 @@ export interface DbPhotoCheckIn {
     created_at: string;
 }
 export declare class DatabaseService {
+    private static readonly ROUTINE_KEY_ALPHABET;
+    static normalizeRoutineKey(input: string | null | undefined): string | null;
+    static extractRoutineKey(routineData: any): string | null;
+    private static generateRoutineKeyCandidate;
+    private static generateUniqueRoutineKey;
+    private static attachRoutineKey;
     static createUser(email: string, name: string): Promise<DbUser | null>;
     static getUserByEmail(email: string): Promise<DbUser | null>;
     static getOrCreateUser(email: string, name: string): Promise<DbUser | null>;
@@ -141,6 +147,7 @@ export declare class DatabaseService {
     static saveRoutine(userId: string, profileId: string, routineData: any): Promise<DbRoutine | null>;
     static getRoutinesByUserId(userId: string): Promise<DbRoutine[]>;
     static getLatestRoutine(userId: string): Promise<DbRoutine | null>;
+    static getRoutineByShareKey(routineKey: string): Promise<DbRoutine | null>;
     static getAllProducts(): Promise<DbProduct[]>;
     static getProductsByCategory(category: string): Promise<DbProduct[]>;
     static searchProducts(tags: string[]): Promise<DbProduct[]>;

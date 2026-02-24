@@ -82,6 +82,21 @@ final class SkinPageViewModel: ObservableObject {
     }
 }
 
+struct GlowProgressSnapshot: Codable, Identifiable {
+    let id: String          // yyyy-MM-dd (one snapshot per day)
+    let recordedAt: Date
+    let score: Int
+    let completedSteps: Int
+    let totalSteps: Int
+    let morningStreak: Int
+    let eveningStreak: Int
+
+    var completionRate: Double {
+        guard totalSteps > 0 else { return 0 }
+        return Double(completedSteps) / Double(totalSteps)
+    }
+}
+
 // MARK: - Main View
 struct SkinView: View {
     @StateObject private var viewModel = SkinPageViewModel()
@@ -93,8 +108,17 @@ struct SkinView: View {
     @State private var routineStreaks: (morning: Int, evening: Int) = (0, 0)
     @State private var shareItems: [Any] = []
     @State private var showShareSheet = false
+    @State private var sharePreview: RoutineSharePreviewData?
     @State private var isPreparingShare = false
     @State private var shareError: String?
+    @State private var routineLibrary: [SessionManager.RoutineLibraryItem] = SessionManager.shared.routineLibrary
+    @State private var isImportingSharedRoutine = false
+    @State private var isApplyingLibraryRoutine = false
+    @State private var libraryStatusMessage: String?
+    @State private var libraryStatusIsError = false
+    @State private var routineKeyInput = ""
+    @State private var showAddRoutineModal = false
+    @State private var progressHistory: [GlowProgressSnapshot] = []
     
     enum SkinTab: String, CaseIterable {
         case routine = "My Routine"
@@ -102,7 +126,101 @@ struct SkinView: View {
         case progress = "Progress"
     }
     
+    private var skinToneBackgroundImageName: String {
+        guard let value = viewModel.profile?.skin_tone_value else { return "lightskin_black" }
+        if value < 0.35 { return "white" }
+        if value < 0.70 { return "lightskin_black" }
+        return "black"
+    }
+
     var body: some View {
+        skinRootContent
+            .background(
+                ZStack(alignment: .top) {
+                    PinkDrapeBackground().ignoresSafeArea()
+                    
+                    if let _ = viewModel.page {
+                        GeometryReader { proxy in
+                            Image(skinToneBackgroundImageName)
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                                .frame(width: proxy.size.width, height: proxy.size.height * 0.45)
+                                .clipped()
+                                .mask(
+                                    LinearGradient(
+                                        colors: [.black, .black.opacity(0)],
+                                        startPoint: .top,
+                                        endPoint: .bottom
+                                    )
+                                )
+                                .opacity(0.15)
+                        }
+                    }
+                }
+                .ignoresSafeArea()
+            )
+            .refreshable {
+                viewModel.load(userId: SessionManager.shared.userId, forceRefresh: true)
+            }
+            .onAppear(perform: handleOnAppear)
+            .sheet(isPresented: $showPaywall) {
+                PremiumPaywallView()
+            }
+            .sheet(item: $routineEditorType) { routineType in
+                RoutineDetailSheet(
+                    routineType: routineType,
+                    steps: feedRoutineSteps(for: routineType),
+                    morningSteps: feedRoutineSteps(for: .morning),
+                    eveningSteps: feedRoutineSteps(for: .evening),
+                    weeklySteps: [],
+                    completedSteps: completedStepsBinding,
+                    streaks: $routineStreaks,
+                    userId: SessionManager.shared.userId ?? "",
+                    onRoutineUpdated: {
+                        viewModel.load(userId: SessionManager.shared.userId, forceRefresh: true)
+                    }
+                )
+            }
+            .sheet(isPresented: $showAddRoutineModal) {
+                addRoutineModalContent
+            }
+            .sheet(isPresented: $showShareSheet) {
+                ActivityShareSheet(items: shareItems)
+            }
+            .overlay {
+                if let sharePreview {
+                    RoutineSharePreviewModal(
+                        preview: sharePreview,
+                        onClose: { self.sharePreview = nil },
+                        onShare: { handleSharePreviewShare(sharePreview) }
+                    )
+                    .zIndex(2)
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .glowUpNotificationDestination)) { note in
+                handleDestinationNotification(note)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .glowUpOpenRoutineImport)) { note in
+                handleRoutineImportNotification(note)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .glowUpRoutineDidUpdate)) { _ in
+                viewModel.load(userId: SessionManager.shared.userId, forceRefresh: true)
+            }
+            .onChange(of: viewModel.page?.streaks.morning ?? 0) { _, newVal in
+                handleMorningStreakChange(newVal)
+            }
+            .onChange(of: viewModel.page?.streaks.evening ?? 0) { _, newVal in
+                handleEveningStreakChange(newVal)
+            }
+            .onChange(of: viewModel.completedSteps.count) { _, _ in
+                recordProgressSnapshot()
+            }
+            .onChange(of: viewModel.page?.insights.skin_score ?? -1) { _, _ in
+                recordProgressSnapshot()
+            }
+    }
+
+    private var skinRootContent: some View {
         ScrollView(showsIndicators: false) {
             VStack(spacing: 20) {
                 if viewModel.isLoading && viewModel.page == nil {
@@ -118,14 +236,7 @@ struct SkinView: View {
                     tabPicker
                     
                     // Content
-                    switch selectedTab {
-                    case .routine:
-                        routineContent
-                    case .profile:
-                        profileContent
-                    case .progress:
-                        progressContent
-                    }
+                    selectedTabContent
                 } else if viewModel.error != nil {
                     errorState
                 }
@@ -134,53 +245,68 @@ struct SkinView: View {
             }
             .padding(.top, 16)
         }
-        .background(PinkDrapeBackground().ignoresSafeArea())
-        .refreshable {
-            viewModel.load(userId: SessionManager.shared.userId, forceRefresh: true)
+    }
+
+    @ViewBuilder
+    private var selectedTabContent: some View {
+        switch selectedTab {
+        case .routine:
+            routineContent
+        case .profile:
+            profileContent
+        case .progress:
+            progressContent
         }
-        .onAppear {
-            if viewModel.page == nil {
-                viewModel.load(userId: SessionManager.shared.userId)
-            }
+    }
+
+    private var completedStepsBinding: Binding<Set<String>> {
+        Binding(
+            get: { viewModel.completedSteps },
+            set: { viewModel.completedSteps = $0 }
+        )
+    }
+
+    private func handleOnAppear() {
+        if viewModel.page == nil {
+            viewModel.load(userId: SessionManager.shared.userId)
         }
-        .sheet(isPresented: $showPaywall) {
-            PremiumPaywallView()
+        routineLibrary = SessionManager.shared.routineLibrary
+        consumePendingSharedRoutineTokenIfNeeded()
+        loadProgressHistory()
+        recordProgressSnapshot()
+    }
+
+    private func handleSharePreviewShare(_ preview: RoutineSharePreviewData) {
+        shareItems = preview.shareItems
+        sharePreview = nil
+        showShareSheet = true
+    }
+
+    private func handleDestinationNotification(_ note: Notification) {
+        guard let destination = note.userInfo?["destination"] as? String else { return }
+        if destination == "routine" {
+            selectedTab = .routine
+        } else if destination == "progress" {
+            selectedTab = .progress
         }
-        .sheet(item: $routineEditorType) { routineType in
-            RoutineDetailSheet(
-                routineType: routineType,
-                steps: feedRoutineSteps(for: routineType),
-                morningSteps: feedRoutineSteps(for: .morning),
-                eveningSteps: feedRoutineSteps(for: .evening),
-                weeklySteps: [],
-                completedSteps: Binding(
-                    get: { viewModel.completedSteps },
-                    set: { viewModel.completedSteps = $0 }
-                ),
-                streaks: $routineStreaks,
-                userId: SessionManager.shared.userId ?? "",
-                onRoutineUpdated: {
-                    viewModel.load(userId: SessionManager.shared.userId, forceRefresh: true)
-                }
-            )
+    }
+
+    private func handleRoutineImportNotification(_ note: Notification) {
+        if let token = note.userInfo?["token"] as? String, !token.isEmpty {
+            importSharedRoutine(token: token)
+        } else {
+            consumePendingSharedRoutineTokenIfNeeded()
         }
-        .sheet(isPresented: $showShareSheet) {
-            ActivityShareSheet(items: shareItems)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GlowUpNotificationDestination"))) { note in
-            guard let destination = note.userInfo?["destination"] as? String else { return }
-            if destination == "routine" {
-                selectedTab = .routine
-            } else if destination == "progress" {
-                selectedTab = .progress
-            }
-        }
-        .onChange(of: viewModel.page?.streaks.morning ?? 0) { _, newVal in
-            routineStreaks.morning = newVal
-        }
-        .onChange(of: viewModel.page?.streaks.evening ?? 0) { _, newVal in
-            routineStreaks.evening = newVal
-        }
+    }
+
+    private func handleMorningStreakChange(_ newValue: Int) {
+        routineStreaks.morning = newValue
+        recordProgressSnapshot()
+    }
+
+    private func handleEveningStreakChange(_ newValue: Int) {
+        routineStreaks.evening = newValue
+        recordProgressSnapshot()
     }
     
     // MARK: - Loading
@@ -229,94 +355,126 @@ struct SkinView: View {
     
     // MARK: - Header
     private var headerSection: some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(viewModel.agent?.page_title ?? "Your Glow")
-                    .font(.custom("Didot", size: 28))
-                    .fontWeight(.bold)
-                    .foregroundColor(Color(hex: "2D2D2D"))
-                
-                Text(viewModel.agent?.page_subtitle ?? "Personalized care for your skin")
-                    .font(.system(size: 14))
-                    .foregroundColor(Color(hex: "888888"))
-                    .lineLimit(2)
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(viewModel.agent?.page_title ?? "Your Glow")
+                        .font(.custom("Didot", size: 33))
+                        .fontWeight(.bold)
+                        .foregroundColor(Color(hex: "232327"))
+                    Text(viewModel.agent?.page_subtitle ?? "Personalized care for your skin")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(Color(hex: "7D7D85"))
+                        .lineLimit(2)
+                }
+
+                Spacer()
+
+                Button(action: {
+                    viewModel.load(userId: SessionManager.shared.userId, forceRefresh: true)
+                }) {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(Color(hex: "FF5C95"))
+                        .frame(width: 38, height: 38)
+                        .background(Color.white.opacity(0.85))
+                        .clipShape(Circle())
+                }
             }
-            
-            Spacer()
-            
-            Button(action: {
-                viewModel.load(userId: SessionManager.shared.userId, forceRefresh: true)
-            }) {
-                Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 16))
-                    .foregroundColor(Color(hex: "FF6B9D"))
-                    .padding(10)
-                    .background(Color(hex: "FFE4EC"))
-                    .clipShape(Circle())
+
+            HStack(spacing: 8) {
+                Label(viewModel.profile?.skin_type.capitalized ?? "Normal", systemImage: "drop.fill")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(Color(hex: "FF5C95"))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(Color.white.opacity(0.85))
+                    .cornerRadius(14)
+                Label("Score \(Int(viewModel.skinScore * 100))", systemImage: "waveform.path.ecg")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(Color(hex: "5B5B62"))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(Color.white.opacity(0.85))
+                    .cornerRadius(14)
             }
         }
+        .padding(18)
+        .background(
+            LinearGradient(
+                colors: [Color(hex: "FFEAF3"), Color(hex: "FFF7FB")],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 22)
+                .stroke(Color.white.opacity(0.9), lineWidth: 1)
+        )
+        .cornerRadius(22)
+        .shadow(color: Color(hex: "D8C9D2").opacity(0.3), radius: 14, x: 0, y: 8)
         .padding(.horizontal, 20)
     }
     
     // MARK: - Score Card
     private var scoreCard: some View {
-        VStack(spacing: 16) {
-            HStack(spacing: 20) {
+        VStack(spacing: 18) {
+            HStack(spacing: 18) {
                 // Score Ring
                 ZStack {
                     Circle()
-                        .stroke(Color(hex: "FFE4EC"), lineWidth: 7)
-                        .frame(width: 90, height: 90)
+                        .stroke(Color(hex: "F2E7EE"), lineWidth: 9)
+                        .frame(width: 100, height: 100)
                     
                     Circle()
                         .trim(from: 0, to: viewModel.skinScore)
                         .stroke(
                             LinearGradient(
-                                colors: [Color(hex: "FF6B9D"), Color(hex: "FFB4C8")],
+                                colors: [Color(hex: "FF5C95"), Color(hex: "FF98B7")],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
                             ),
-                            style: StrokeStyle(lineWidth: 7, lineCap: .round)
+                            style: StrokeStyle(lineWidth: 9, lineCap: .round)
                         )
-                        .frame(width: 90, height: 90)
+                        .frame(width: 100, height: 100)
                         .rotationEffect(.degrees(-90))
                         .animation(.spring(response: 0.8), value: viewModel.skinScore)
                     
-                    VStack(spacing: 1) {
+                    VStack(spacing: 2) {
                         Text("\(Int(viewModel.skinScore * 100))")
-                            .font(.system(size: 26, weight: .bold))
-                            .foregroundColor(Color(hex: "2D2D2D"))
+                            .font(.system(size: 28, weight: .bold))
+                            .foregroundColor(Color(hex: "252529"))
                         Text("Score")
-                            .font(.system(size: 11))
-                            .foregroundColor(Color(hex: "999999"))
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundColor(Color(hex: "9B9BA2"))
                     }
                 }
                 
                 // Profile Quick Info
-                VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: 12) {
                     HStack(spacing: 6) {
                         Image(systemName: "drop.fill")
                             .font(.system(size: 11))
-                            .foregroundColor(Color(hex: "FF6B9D"))
+                            .foregroundColor(Color(hex: "FF5C95"))
                         Text("Skin Type")
-                            .font(.system(size: 11))
-                            .foregroundColor(Color(hex: "999999"))
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(Color(hex: "94949A"))
                     }
                     Text(viewModel.profile?.skin_type.capitalized ?? "Normal")
-                        .font(.system(size: 16, weight: .semibold))
+                        .font(.system(size: 18, weight: .bold))
                         .foregroundColor(Color(hex: "2D2D2D"))
                     
                     HStack(spacing: 6) {
                         Image(systemName: "target")
                             .font(.system(size: 11))
-                            .foregroundColor(Color(hex: "FF6B9D"))
+                            .foregroundColor(Color(hex: "FF5C95"))
                         Text("Focus")
-                            .font(.system(size: 11))
-                            .foregroundColor(Color(hex: "999999"))
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(Color(hex: "94949A"))
                     }
                     Text(viewModel.agent?.weekly_focus ?? "Consistency")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(Color(hex: "FF6B9D"))
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(Color(hex: "FF5C95"))
                         .lineLimit(2)
                 }
                 
@@ -324,7 +482,7 @@ struct SkinView: View {
             }
             
             // Quick Stats Row
-            HStack(spacing: 10) {
+            HStack(spacing: 12) {
                 QuickStat(
                     icon: "drop.fill",
                     label: "Hydration",
@@ -346,88 +504,63 @@ struct SkinView: View {
             }
         }
         .padding(18)
-        .background(Color.white)
-        .cornerRadius(20)
-        .shadow(color: Color.black.opacity(0.05), radius: 10, x: 0, y: 4)
+        .background(Color.white.opacity(0.92))
+        .overlay(
+            RoundedRectangle(cornerRadius: 22)
+                .stroke(Color.white.opacity(0.95), lineWidth: 1)
+        )
+        .cornerRadius(22)
+        .shadow(color: Color.black.opacity(0.07), radius: 14, x: 0, y: 8)
         .padding(.horizontal, 20)
     }
     
     // MARK: - Tab Picker
     private var tabPicker: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 0) {
             ForEach(SkinTab.allCases, id: \.self) { tab in
                 Button(action: {
                     withAnimation(.spring(response: 0.3)) {
                         selectedTab = tab
                     }
                 }) {
-                    Text(tab.rawValue)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundColor(selectedTab == tab ? .white : Color(hex: "666666"))
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 10)
-                        .background(
-                            Group {
-                                if selectedTab == tab {
-                                    LinearGradient(
-                                        colors: [Color(hex: "FF6B9D"), Color(hex: "FFB4C8")],
-                                        startPoint: .leading,
-                                        endPoint: .trailing
-                                    )
-                                } else {
-                                    LinearGradient(colors: [Color.white, Color.white], startPoint: .leading, endPoint: .trailing)
-                                }
-                            }
-                        )
-                        .cornerRadius(12)
-                        .shadow(
-                            color: selectedTab == tab ? Color(hex: "FF6B9D").opacity(0.25) : .clear,
-                            radius: 6, x: 0, y: 3
-                        )
+                    VStack(spacing: 6) {
+                        Text(tab.rawValue)
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(selectedTab == tab ? Color(hex: "FF5C95") : Color(hex: "8D8D94"))
+                        Capsule()
+                            .fill(selectedTab == tab ? Color(hex: "FF5C95") : Color.clear)
+                            .frame(height: 3)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 10)
                 }
             }
-            Spacer()
         }
+        .padding(.horizontal, 12)
+        .padding(.bottom, 6)
+        .background(Color.white.opacity(0.85))
+        .cornerRadius(16)
+        .overlay(
+            RoundedRectangle(cornerRadius: 16)
+                .stroke(Color.white.opacity(0.9), lineWidth: 1)
+        )
+        .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 3)
         .padding(.horizontal, 20)
     }
     
     // MARK: - Routine Content
     private var routineContent: some View {
-        VStack(spacing: 16) {
-            if !viewModel.morningSteps.isEmpty || !viewModel.eveningSteps.isEmpty {
-                HStack {
-                    Text("Routine Actions")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundColor(Color(hex: "777777"))
-                    
-                    Spacer()
-                    
-                    Button(action: { prepareRoutineShare(routineType: nil, fallbackTitle: "My Routine", fallbackSteps: viewModel.morningSteps + viewModel.eveningSteps) }) {
-                        Label("Share", systemImage: "square.and.arrow.up")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundColor(isPreparingShare ? Color(hex: "AAAAAA") : Color(hex: "666666"))
-                    }
-                    .disabled(isPreparingShare)
-                    
-                    Menu {
-                        if !viewModel.morningSteps.isEmpty {
-                            Button("Edit Morning") { routineEditorType = .morning }
-                        }
-                        if !viewModel.eveningSteps.isEmpty {
-                            Button("Edit Evening") { routineEditorType = .evening }
-                        }
-                    } label: {
-                        Label("Edit", systemImage: "pencil")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundColor(Color(hex: "FF6B9D"))
-                    }
-                }
+        VStack(spacing: 18) {
+            routineKeyImportSection
 
-                if let shareError {
-                    Text(shareError)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(Color(hex: "D64545"))
-                }
+            if let shareError {
+                Text(shareError)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(Color(hex: "D64545"))
+            }
+
+            if !routineLibrary.isEmpty {
+                routineLibrarySection
             }
 
             // Agent Assessment
@@ -478,7 +611,7 @@ struct SkinView: View {
                     Text("Your routine is being crafted")
                         .font(.system(size: 16, weight: .medium))
                         .foregroundColor(Color(hex: "666666"))
-                    Text("Complete onboarding to get your personalized routine with product recommendations")
+                    Text("Complete photo onboarding to unlock your personalized glow-up techniques and product recommendations.")
                         .font(.system(size: 13))
                         .foregroundColor(Color(hex: "999999"))
                         .multilineTextAlignment(.center)
@@ -491,33 +624,150 @@ struct SkinView: View {
         }
         .padding(.horizontal, 20)
     }
+
+    private var routineKeyImportSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Button(action: { showAddRoutineModal = true }) {
+                HStack(spacing: 12) {
+                    ZStack {
+                        Circle()
+                            .fill(Color(hex: "FFE4EC"))
+                            .frame(width: 34, height: 34)
+                        Image(systemName: "plus")
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundColor(Color(hex: "FF6B9D"))
+                    }
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Add Routine")
+                            .font(.system(size: 15, weight: .bold))
+                            .foregroundColor(Color(hex: "2D2D2D"))
+                        Text("Import from a routine key")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(Color(hex: "888888"))
+                    }
+
+                    Spacer()
+
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(Color(hex: "AAAAAA"))
+                }
+            }
+            .buttonStyle(.plain)
+
+            if let libraryStatusMessage {
+                Text(libraryStatusMessage)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(libraryStatusIsError ? Color(hex: "D64545") : Color(hex: "3B8F68"))
+            }
+        }
+        .padding(15)
+        .background(Color.white.opacity(0.92))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16)
+                .stroke(Color.white.opacity(0.95), lineWidth: 1)
+        )
+        .cornerRadius(16)
+        .shadow(color: Color.black.opacity(0.05), radius: 10, x: 0, y: 4)
+    }
+
+    private var addRoutineModalContent: some View {
+        NavigationView {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("Enter a routine key from another user to save it in your Routine Library.")
+                    .font(.system(size: 14))
+                    .foregroundColor(Color(hex: "666666"))
+
+                HStack(spacing: 8) {
+                    TextField("Enter routine key", text: $routineKeyInput)
+                        .textInputAutocapitalization(.characters)
+                        .disableAutocorrection(true)
+                        .font(.system(size: 14, weight: .semibold, design: .monospaced))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .background(Color.white)
+                        .cornerRadius(10)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10)
+                                .stroke(Color(hex: "EEDCE5"), lineWidth: 1)
+                        )
+
+                    Button(action: importRoutineUsingTypedKey) {
+                        HStack(spacing: 6) {
+                            if isImportingSharedRoutine {
+                                ProgressView().tint(.white)
+                            } else {
+                                Image(systemName: "tray.and.arrow.down.fill")
+                            }
+                            Text("Add")
+                                .font(.system(size: 13, weight: .bold))
+                        }
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .background(Color(hex: "FF6B9D"))
+                        .cornerRadius(10)
+                    }
+                    .disabled(isImportingSharedRoutine || normalizedTypedRoutineKey.count < 6)
+                }
+
+                Text("Keys use only letters and numbers.")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(Color(hex: "999999"))
+
+                Spacer(minLength: 0)
+            }
+            .padding(20)
+            .background(PinkDrapeBackground().ignoresSafeArea())
+            .navigationTitle("Add Routine")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") { showAddRoutineModal = false }
+                        .font(.system(size: 14, weight: .semibold))
+                }
+            }
+        }
+        .navigationViewStyle(StackNavigationViewStyle())
+    }
     
     private func routineSection(title: String, icon: String, color: Color, steps: [SkinPageRoutineStep], routineType: String) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        let doneCount = completedRoutineCount(steps: steps, routineType: routineType)
+        let completionTint = doneCount == steps.count ? Color(hex: "3B8F68") : Color(hex: "8E8E95")
+
+        return VStack(alignment: .leading, spacing: 14) {
             // Header
             HStack(spacing: 10) {
-                Image(systemName: icon)
-                    .font(.system(size: 16))
-                    .foregroundColor(color)
+                ZStack {
+                    Circle()
+                        .fill(color.opacity(0.14))
+                        .frame(width: 28, height: 28)
+                    Image(systemName: icon)
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundColor(color)
+                }
                 
                 Text(title)
-                    .font(.system(size: 17, weight: .bold))
+                    .font(.system(size: 18, weight: .bold))
                     .foregroundColor(Color(hex: "2D2D2D"))
                 
                 Spacer()
                 
-                // Completion count
-                let doneCount = steps.filter { viewModel.completedSteps.contains(viewModel.stepKey($0, routineType: routineType)) }.count
                 Text("\(doneCount)/\(steps.count)")
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(doneCount == steps.count ? Color(hex: "4ECDC4") : Color(hex: "999999"))
+                    .foregroundColor(completionTint)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color(hex: "F5F5F7"))
+                    .cornerRadius(8)
 
                 Button(action: { prepareRoutineShare(routineType: routineType, fallbackTitle: title, fallbackSteps: steps) }) {
                     Image(systemName: "square.and.arrow.up")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundColor(isPreparingShare ? Color(hex: "B5B5B5") : Color(hex: "777777"))
-                        .padding(6)
-                        .background(Color(hex: "F6F6F6"))
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(isPreparingShare ? Color(hex: "B5B5B5") : Color(hex: "6D6D73"))
+                        .padding(7)
+                        .background(Color(hex: "F3F3F6"))
                         .clipShape(Circle())
                 }
                 .disabled(isPreparingShare)
@@ -526,37 +776,140 @@ struct SkinView: View {
                     routineEditorType = routineType == "morning" ? .morning : .evening
                 }) {
                     Image(systemName: "pencil")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundColor(Color(hex: "FF6B9D"))
-                        .padding(6)
-                        .background(Color(hex: "FFE8F0"))
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(Color(hex: "FF5C95"))
+                        .padding(7)
+                        .background(Color(hex: "FFEAF2"))
                         .clipShape(Circle())
                 }
             }
             
             // Steps
-            ForEach(steps) { step in
-                SkinRoutineStepRow(
-                    step: step,
-                    isCompleted: viewModel.completedSteps.contains(viewModel.stepKey(step, routineType: routineType)),
-                    accentColor: color,
-                    onToggle: {
-                        let gen = UIImpactFeedbackGenerator(style: .light)
-                        gen.impactOccurred()
-                        viewModel.toggleStep(step, routineType: routineType)
-                    }
-                )
+            VStack(spacing: 10) {
+                ForEach(steps) { step in
+                    SkinRoutineStepRow(
+                        step: step,
+                        isCompleted: viewModel.completedSteps.contains(viewModel.stepKey(step, routineType: routineType)),
+                        accentColor: color,
+                        onToggle: {
+                            let gen = UIImpactFeedbackGenerator(style: .light)
+                            gen.impactOccurred()
+                            viewModel.toggleStep(step, routineType: routineType)
+                        }
+                    )
+                }
             }
         }
         .padding(16)
-        .background(Color.white)
+        .background(Color.white.opacity(0.94))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18)
+                .stroke(Color.white.opacity(0.95), lineWidth: 1)
+        )
+        .cornerRadius(18)
+        .shadow(color: Color.black.opacity(0.05), radius: 10, x: 0, y: 4)
+    }
+
+    private func completedRoutineCount(steps: [SkinPageRoutineStep], routineType: String) -> Int {
+        steps.filter { step in
+            viewModel.completedSteps.contains(viewModel.stepKey(step, routineType: routineType))
+        }.count
+    }
+
+    private var routineLibrarySection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Routine Library")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundColor(Color(hex: "2D2D2D"))
+                Spacer()
+                if isImportingSharedRoutine {
+                    ProgressView()
+                        .scaleEffect(0.85)
+                }
+            }
+
+            if let libraryStatusMessage {
+                Text(libraryStatusMessage)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(libraryStatusIsError ? Color(hex: "D64545") : Color(hex: "3B8F68"))
+            }
+
+            ForEach(routineLibrary.prefix(5)) { item in
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text(item.title)
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(Color(hex: "2D2D2D"))
+                            .lineLimit(1)
+                        Spacer()
+                        Text(item.importedAt, style: .date)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(Color(hex: "999999"))
+                    }
+
+                    HStack(spacing: 10) {
+                        Label("AM \(item.morning.count)", systemImage: "sun.max.fill")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(Color(hex: "D29A00"))
+                        Label("PM \(item.evening.count)", systemImage: "moon.fill")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(Color(hex: "8A6CF3"))
+                    }
+
+                    HStack(spacing: 8) {
+                        Button(action: { applyRoutineLibraryItem(item) }) {
+                            Text("Apply Morning + Night")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 8)
+                                .background(Color(hex: "FF6B9D"))
+                                .cornerRadius(10)
+                        }
+                        .disabled(isApplyingLibraryRoutine)
+
+                        Button(action: {
+                            SessionManager.shared.removeRoutineLibraryItem(id: item.id)
+                            routineLibrary = SessionManager.shared.routineLibrary
+                        }) {
+                            Text("Remove")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundColor(Color(hex: "777777"))
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 8)
+                                .background(Color(hex: "F2F2F2"))
+                                .cornerRadius(10)
+                        }
+                        .disabled(isApplyingLibraryRoutine)
+                    }
+                }
+                .padding(12)
+                .background(Color(hex: "FBF8FC"))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(Color(hex: "F1E8EE"), lineWidth: 1)
+                )
+                .cornerRadius(12)
+            }
+        }
+        .padding(16)
+        .background(Color.white.opacity(0.92))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16)
+                .stroke(Color.white.opacity(0.95), lineWidth: 1)
+        )
         .cornerRadius(16)
-        .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 2)
+        .shadow(color: Color.black.opacity(0.05), radius: 10, x: 0, y: 4)
     }
     
     // MARK: - Profile Content
     private var profileContent: some View {
-        VStack(spacing: 14) {
+        let skinGoals = formattedGoals(viewModel.profile?.skin_goals ?? [])
+        let skinConcerns = formattedConcerns(viewModel.profile?.skin_concerns ?? [])
+        let hairConcerns = formattedConcerns(viewModel.profile?.hair_concerns ?? [])
+
+        return VStack(spacing: 14) {
             // Skin Info Card
             VStack(alignment: .leading, spacing: 14) {
                 Text("Your Skin Profile")
@@ -574,13 +927,13 @@ struct SkinView: View {
             .cornerRadius(16)
             
             // Goals
-            if let goals = viewModel.profile?.skin_goals, !goals.isEmpty {
+            if !skinGoals.isEmpty {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Your Goals")
                         .font(.system(size: 17, weight: .bold))
                         .foregroundColor(Color(hex: "2D2D2D"))
                     
-                    FlowLayoutView(items: goals.map { formatGoal($0) }) { goal in
+                    FlowLayoutView(items: skinGoals) { goal in
                         HStack(spacing: 5) {
                             Image(systemName: "checkmark.circle.fill")
                                 .font(.system(size: 13))
@@ -601,13 +954,13 @@ struct SkinView: View {
             }
             
             // Concerns
-            if let concerns = viewModel.profile?.skin_concerns, !concerns.isEmpty {
+            if !skinConcerns.isEmpty {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Concerns")
                         .font(.system(size: 17, weight: .bold))
                         .foregroundColor(Color(hex: "2D2D2D"))
                     
-                    FlowLayoutView(items: concerns.map { formatConcern($0) }) { concern in
+                    FlowLayoutView(items: skinConcerns) { concern in
                         Text(concern)
                             .font(.system(size: 13, weight: .medium))
                             .foregroundColor(Color(hex: "FF6B9D"))
@@ -635,8 +988,8 @@ struct SkinView: View {
                         profileRow(icon: "drop.triangle.fill", label: "Wash Frequency", value: formatWashFrequency(wash), color: "4ECDC4")
                     }
                     
-                    if let hairConcerns = viewModel.profile?.hair_concerns, !hairConcerns.isEmpty {
-                        FlowLayoutView(items: hairConcerns.map { formatConcern($0) }) { concern in
+                    if !hairConcerns.isEmpty {
+                        FlowLayoutView(items: hairConcerns) { concern in
                             Text(concern)
                                 .font(.system(size: 12, weight: .medium))
                                 .foregroundColor(Color(hex: "FF8FB1"))
@@ -676,159 +1029,75 @@ struct SkinView: View {
     
     // MARK: - Progress Content
     private var progressContent: some View {
-        let totalSteps = viewModel.morningSteps.count + viewModel.eveningSteps.count
-        let completed = viewModel.completedSteps.count
-        let morningStreak = viewModel.streaks?.morning ?? 0
-        let eveningStreak = viewModel.streaks?.evening ?? 0
-        
+        let history = progressHistory.sorted { $0.recordedAt < $1.recordedAt }
+        let recent = Array(history.suffix(8))
+        let timeline = Array(recent.reversed())
+        let latest = history.last
+        let first = history.first
+        let scoreDelta = (latest?.score ?? 0) - (first?.score ?? 0)
+        let averageCompletion = history.isEmpty ? 0 : history.map { $0.completionRate }.reduce(0, +) / Double(history.count)
+        let bestStreak = history.map { max($0.morningStreak, $0.eveningStreak) }.max() ?? 0
+
         return VStack(spacing: 14) {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("Your Timeline")
-                    .font(.system(size: 17, weight: .bold))
+            VStack(alignment: .leading, spacing: 12) {
+                Text("GlowUp Progress Tracker")
+                    .font(.system(size: 18, weight: .bold))
                     .foregroundColor(Color(hex: "2D2D2D"))
-                
-                TimelineRow(
-                    title: "Today",
-                    subtitle: totalSteps > 0
-                        ? "\(completed)/\(totalSteps) routine steps completed"
-                        : "No routine steps yet — complete onboarding to start",
-                    icon: "checkmark.circle.fill",
-                    color: Color(hex: "4ECDC4"),
-                    isLast: false
-                )
-                
-                TimelineRow(
-                    title: "Streaks",
-                    subtitle: "Morning \(morningStreak)d · Evening \(eveningStreak)d",
-                    icon: "flame.fill",
-                    color: Color(hex: "FF6B6B"),
-                    isLast: false
-                )
-                
-                if let note = viewModel.agent?.progress_note, !note.isEmpty {
-                    TimelineRow(
-                        title: "Coach Note",
-                        subtitle: note,
-                        icon: "quote.opening",
-                        color: Color(hex: "FFB4C8"),
-                        isLast: false
+                Text("Track your score, consistency, and streak trend over time.")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(Color(hex: "7E7E86"))
+
+                HStack(spacing: 10) {
+                    progressMetricCard(
+                        title: "Score Change",
+                        value: "\(scoreDelta >= 0 ? "+" : "")\(scoreDelta)",
+                        tint: scoreDelta >= 0 ? Color(hex: "3B8F68") : Color(hex: "D64545")
+                    )
+                    progressMetricCard(
+                        title: "Avg Consistency",
+                        value: "\(Int((averageCompletion * 100).rounded()))%",
+                        tint: Color(hex: "5B86FF")
+                    )
+                    progressMetricCard(
+                        title: "Best Streak",
+                        value: "\(bestStreak)d",
+                        tint: Color(hex: "FF8E3C")
                     )
                 }
-                
-                TimelineRow(
-                    title: "Next photo check-in",
-                    subtitle: "Biweekly progress photo",
-                    icon: "camera.fill",
-                    color: Color(hex: "FF6B9D"),
-                    isLast: true,
-                    accessory: AnyView(
-                        Button(action: {}) {
-                            HStack(spacing: 6) {
-                                Image(systemName: "camera")
-                                Text("Take Photo")
-                            }
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 8)
-                            .background(
-                                LinearGradient(
-                                    colors: [Color(hex: "FF6B9D"), Color(hex: "FFB4C8")],
-                                    startPoint: .leading,
-                                    endPoint: .trailing
-                                )
-                            )
-                            .cornerRadius(10)
-                        }
-                    )
-                )
             }
             .padding(18)
             .background(Color.white)
             .cornerRadius(16)
-            
-            // Advanced Analysis (Premium)
-            VStack(alignment: .leading, spacing: 16) {
-                HStack {
-                    Text("Advanced Analysis")
-                        .font(.system(size: 17, weight: .bold))
-                        .foregroundColor(Color(hex: "2D2D2D"))
-                    Spacer()
-                    if !SessionManager.shared.isPremium {
-                        Image(systemName: "lock.fill")
-                            .font(.system(size: 14))
-                            .foregroundColor(Color(hex: "FF6B9D"))
-                    }
-                }
-                
-                if SessionManager.shared.isPremium {
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack(spacing: 12) {
-                            ZStack {
-                                Circle()
-                                    .fill(Color(hex: "9B6BFF").opacity(0.1))
-                                    .frame(width: 40, height: 40)
-                                Image(systemName: "chart.xyaxis.line")
-                                    .font(.system(size: 18))
-                                    .foregroundColor(Color(hex: "9B6BFF"))
-                            }
-                            
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("Skin improvement trajectory")
-                                    .font(.system(size: 13))
-                                    .foregroundColor(Color(hex: "666666"))
-                                Text("+12% Clarity")
-                                    .font(.system(size: 16, weight: .bold))
-                                    .foregroundColor(Color(hex: "2D2D2D"))
-                            }
-                        }
-                        
-                        Text("Your consistent use of Vitamin C is showing results in brightness metrics based on your last 3 photos.")
-                            .font(.system(size: 13))
-                            .foregroundColor(Color(hex: "555555"))
-                            .lineSpacing(4)
-                            .padding(.top, 4)
-                    }
-                    .padding(16)
-                    .background(Color(hex: "F8F6FF"))
-                    .cornerRadius(12)
+
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Score Trend")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundColor(Color(hex: "2D2D2D"))
+
+                if history.isEmpty {
+                    Text("No progress snapshots yet. Complete steps and check in daily.")
+                        .font(.system(size: 13))
+                        .foregroundColor(Color(hex: "8F8F96"))
                 } else {
-                    Button(action: { showPaywall = true }) {
-                        VStack(spacing: 16) {
-                            Image(systemName: "wand.and.stars")
-                                .font(.system(size: 32))
-                                .foregroundColor(Color(hex: "FF6B9D"))
-                                .padding(.top, 8)
-                            
-                            VStack(spacing: 6) {
-                                Text("Unlock AI Progress Tracking")
-                                    .font(.system(size: 15, weight: .semibold))
-                                    .foregroundColor(Color(hex: "2D2D2D"))
-                                
-                                Text("See exactly which products are working\nand track your glow-up with computer vision.")
-                                    .font(.system(size: 13))
-                                    .foregroundColor(Color(hex: "888888"))
-                                    .multilineTextAlignment(.center)
-                                    .lineSpacing(3)
-                            }
-                            
-                            Text("UPGRADE TO GLOWUP+")
-                                .font(.system(size: 11, weight: .bold))
-                                .foregroundColor(.white)
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 10)
-                                .background(Color(hex: "FF6B9D"))
-                                .cornerRadius(20)
-                                .shadow(color: Color(hex: "FF6B9D").opacity(0.3), radius: 6, x: 0, y: 3)
-                        }
-                        .padding(24)
-                        .frame(maxWidth: .infinity)
-                        .background(
-                            RoundedRectangle(cornerRadius: 16)
-                                .stroke(style: StrokeStyle(lineWidth: 1.5, dash: [6]))
-                                .foregroundColor(Color(hex: "FFB4C8").opacity(0.6))
-                                .background(Color(hex: "FFF5F8").cornerRadius(16))
-                        )
+                    ProgressTrendBars(snapshots: recent)
+                }
+            }
+            .padding(18)
+            .background(Color.white)
+            .cornerRadius(16)
+
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Timeline")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundColor(Color(hex: "2D2D2D"))
+
+                if history.isEmpty {
+                    Text("Your timeline will populate as you keep using your routine.")
+                        .font(.system(size: 13))
+                        .foregroundColor(Color(hex: "8F8F96"))
+                } else {
+                    ForEach(timeline) { snapshot in
+                        progressTimelineRow(snapshot)
                     }
                 }
             }
@@ -836,8 +1105,116 @@ struct SkinView: View {
             .background(Color.white)
             .cornerRadius(16)
         }
-
         .padding(.horizontal, 20)
+    }
+
+    private func progressTimelineRow(_ snapshot: GlowProgressSnapshot) -> some View {
+        HStack(spacing: 10) {
+            Circle()
+                .fill(Color(hex: "FF6B9D").opacity(0.2))
+                .frame(width: 24, height: 24)
+                .overlay(
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundColor(Color(hex: "FF6B9D"))
+                )
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(progressDateLabel(snapshot.recordedAt))
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(Color(hex: "2F2F33"))
+                Text(progressTimelineSubtitle(snapshot))
+                    .font(.system(size: 12))
+                    .foregroundColor(Color(hex: "7D7D85"))
+            }
+
+            Spacer()
+        }
+        .padding(10)
+        .background(Color(hex: "FAF8FB"))
+        .cornerRadius(12)
+    }
+
+    private var progressHistoryKey: String {
+        "com.glowup.progressHistory.\(SessionManager.shared.userId ?? "guest")"
+    }
+
+    private func loadProgressHistory() {
+        guard let data = UserDefaults.standard.data(forKey: progressHistoryKey),
+              let decoded = try? JSONDecoder().decode([GlowProgressSnapshot].self, from: data) else {
+            progressHistory = []
+            return
+        }
+        progressHistory = decoded.sorted { $0.recordedAt < $1.recordedAt }
+    }
+
+    private func persistProgressHistory(_ snapshots: [GlowProgressSnapshot]) {
+        guard let data = try? JSONEncoder().encode(snapshots) else { return }
+        UserDefaults.standard.set(data, forKey: progressHistoryKey)
+        progressHistory = snapshots
+    }
+
+    private func recordProgressSnapshot() {
+        guard viewModel.page != nil else { return }
+        let date = Date()
+        let dayId = progressSnapshotDayId(date)
+        let totalSteps = max(viewModel.morningSteps.count + viewModel.eveningSteps.count, 0)
+        let snapshot = GlowProgressSnapshot(
+            id: dayId,
+            recordedAt: date,
+            score: Int((viewModel.skinScore * 100).rounded()),
+            completedSteps: viewModel.completedSteps.count,
+            totalSteps: totalSteps,
+            morningStreak: viewModel.streaks?.morning ?? 0,
+            eveningStreak: viewModel.streaks?.evening ?? 0
+        )
+
+        var snapshots = progressHistory.sorted { $0.recordedAt < $1.recordedAt }
+        if let index = snapshots.firstIndex(where: { $0.id == dayId }) {
+            snapshots[index] = snapshot
+        } else {
+            snapshots.append(snapshot)
+        }
+        // Keep last 120 daily points (~4 months) in local storage.
+        if snapshots.count > 120 {
+            snapshots.removeFirst(snapshots.count - 120)
+        }
+        persistProgressHistory(snapshots)
+    }
+
+    private func progressSnapshotDayId(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: date)
+    }
+
+    private func progressDateLabel(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MMM d"
+        return formatter.string(from: date)
+    }
+
+    private func progressTimelineSubtitle(_ snapshot: GlowProgressSnapshot) -> String {
+        let stepsTotal = max(snapshot.totalSteps, 1)
+        let streak = max(snapshot.morningStreak, snapshot.eveningStreak)
+        return "Score \(snapshot.score) • \(snapshot.completedSteps)/\(stepsTotal) steps • Streak \(streak)d"
+    }
+
+    private func progressMetricCard(title: String, value: String, tint: Color) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(Color(hex: "87878E"))
+            Text(value)
+                .font(.system(size: 18, weight: .bold))
+                .foregroundColor(tint)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(Color(hex: "FAF9FC"))
+        .cornerRadius(12)
     }
     
     // MARK: - Formatters
@@ -845,9 +1222,17 @@ struct SkinView: View {
     private func formatGoal(_ goal: String) -> String {
         goal.replacingOccurrences(of: "_", with: " ").capitalized
     }
+
+    private func formattedGoals(_ goals: [String]) -> [String] {
+        goals.map { formatGoal($0) }
+    }
     
     private func formatConcern(_ concern: String) -> String {
         concern.replacingOccurrences(of: "_", with: " ").capitalized
+    }
+
+    private func formattedConcerns(_ concerns: [String]) -> [String] {
+        concerns.map { formatConcern($0) }
     }
     
     private func formatSunscreen(_ usage: String?) -> String {
@@ -906,9 +1291,6 @@ struct SkinView: View {
             if let brand = step.product_brand, !brand.isEmpty {
                 line += " (\(brand))"
             }
-            if let productId = step.product_id, !productId.isEmpty {
-                line += "\n   Product ID: \(productId)"
-            }
             if let instructions = step.instructions, !instructions.isEmpty {
                 line += "\n   \(instructions)"
             }
@@ -923,6 +1305,189 @@ struct SkinView: View {
         return "\(morning)\n\n\(evening)"
     }
 
+    private var normalizedTypedRoutineKey: String {
+        routineKeyInput
+            .uppercased()
+            .filter { $0.isASCII && ($0.isLetter || $0.isNumber) }
+    }
+
+    private func importRoutineUsingTypedKey() {
+        let key = normalizedTypedRoutineKey
+        guard key.count >= 6 else {
+            libraryStatusIsError = true
+            libraryStatusMessage = "Enter a valid routine key."
+            return
+        }
+        guard !isImportingSharedRoutine else { return }
+        isImportingSharedRoutine = true
+        libraryStatusMessage = nil
+
+        Task {
+            do {
+                let payload = try await APIService.shared.fetchRoutineByKey(key)
+                let stored = storeImportedRoutine(
+                    payload: payload,
+                    sourceLabel: "Routine Key",
+                    sourceToken: nil,
+                    routineKey: payload.routine_key ?? key
+                )
+                guard stored else {
+                    throw APIError.serverMessage("That key is valid but has no morning/evening routine.")
+                }
+                await MainActor.run {
+                    routineKeyInput = ""
+                    routineLibrary = SessionManager.shared.routineLibrary
+                    selectedTab = .routine
+                    showAddRoutineModal = false
+                    isImportingSharedRoutine = false
+                    libraryStatusIsError = false
+                    libraryStatusMessage = "Routine key recognized. Saved to your library."
+                }
+            } catch {
+                await MainActor.run {
+                    isImportingSharedRoutine = false
+                    libraryStatusIsError = true
+                    libraryStatusMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    @discardableResult
+    private func storeImportedRoutine(
+        payload: APIService.SharedRoutineFetchResponse,
+        sourceLabel: String,
+        sourceToken: String?,
+        routineKey: String?
+    ) -> Bool {
+        let morning = payload.routine.morning ?? []
+        let evening = payload.routine.evening ?? []
+        let weekly = payload.routine.weekly ?? []
+
+        if morning.isEmpty && evening.isEmpty {
+            return false
+        }
+
+        let title: String
+        if let routineKey, !routineKey.isEmpty {
+            title = "Routine \(routineKey)"
+        } else {
+            title = "Imported Routine"
+        }
+
+        SessionManager.shared.addRoutineToLibrary(
+            title: title,
+            morning: morning,
+            evening: evening,
+            weekly: weekly,
+            sourceLabel: sourceLabel,
+            sourceToken: sourceToken
+        )
+        return true
+    }
+
+    private func consumePendingSharedRoutineTokenIfNeeded() {
+        guard let token = SessionManager.shared.consumePendingSharedRoutineToken(),
+              !token.isEmpty else { return }
+        importSharedRoutine(token: token)
+    }
+
+    private func importSharedRoutine(token: String) {
+        guard !token.isEmpty else { return }
+        guard !isImportingSharedRoutine else { return }
+        isImportingSharedRoutine = true
+        libraryStatusMessage = nil
+
+        Task {
+            do {
+                let payload = try await APIService.shared.fetchSharedRoutine(token: token)
+                let morning = payload.routine.morning ?? []
+                let evening = payload.routine.evening ?? []
+                if morning.isEmpty && evening.isEmpty {
+                    throw APIError.serverMessage("Shared routine has no morning/evening steps.")
+                }
+
+                storeImportedRoutine(
+                    payload: payload,
+                    sourceLabel: "Shared Link",
+                    sourceToken: token,
+                    routineKey: payload.routine_key
+                )
+
+                await MainActor.run {
+                    routineLibrary = SessionManager.shared.routineLibrary
+                    selectedTab = .routine
+                    isImportingSharedRoutine = false
+                    libraryStatusIsError = false
+                    libraryStatusMessage = "Routine imported. Apply it from your library."
+                }
+            } catch {
+                await MainActor.run {
+                    isImportingSharedRoutine = false
+                    libraryStatusIsError = true
+                    libraryStatusMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func applyRoutineLibraryItem(_ item: SessionManager.RoutineLibraryItem) {
+        guard let userId = SessionManager.shared.userId, !userId.isEmpty else {
+            libraryStatusIsError = true
+            libraryStatusMessage = "Sign in to apply shared routines."
+            return
+        }
+        guard !isApplyingLibraryRoutine else { return }
+        isApplyingLibraryRoutine = true
+        libraryStatusMessage = nil
+
+        Task {
+            do {
+                let morning = item.morning.enumerated().map { index, step in
+                    APIService.RoutineUpdateStep(
+                        step: index + 1,
+                        name: step.name,
+                        instructions: step.tip ?? "",
+                        frequency: "daily",
+                        product_id: step.product_id,
+                        product_name: step.product_name
+                    )
+                }
+                let evening = item.evening.enumerated().map { index, step in
+                    APIService.RoutineUpdateStep(
+                        step: index + 1,
+                        name: step.name,
+                        instructions: step.tip ?? "",
+                        frequency: "daily",
+                        product_id: step.product_id,
+                        product_name: step.product_name
+                    )
+                }
+
+                try await APIService.shared.updateRoutine(
+                    userId: userId,
+                    morning: morning,
+                    evening: evening,
+                    weekly: [],
+                    summary: "Routine applied from library"
+                )
+
+                await MainActor.run {
+                    isApplyingLibraryRoutine = false
+                    libraryStatusIsError = false
+                    libraryStatusMessage = "Routine applied to your main Morning + Evening plan."
+                    viewModel.load(userId: userId, forceRefresh: true)
+                }
+            } catch {
+                await MainActor.run {
+                    isApplyingLibraryRoutine = false
+                    libraryStatusIsError = true
+                    libraryStatusMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
     private func prepareRoutineShare(routineType: String?, fallbackTitle: String, fallbackSteps: [SkinPageRoutineStep]) {
         guard let userId = SessionManager.shared.userId else { return }
         isPreparingShare = true
@@ -931,14 +1496,47 @@ struct SkinView: View {
         Task {
             do {
                 let response = try await APIService.shared.createRoutineShareLink(userId: userId, routineType: routineType)
-                let fallbackText = shareText(title: fallbackTitle, steps: fallbackSteps)
+                let routineKey = response.routine_key?.trimmingCharacters(in: .whitespacesAndNewlines)
+                let keyLine: String = {
+                    if let key = routineKey, !key.isEmpty {
+                        return "\n\nRoutine Key: \(key)"
+                    }
+                    return ""
+                }()
+                let fallbackText = shareText(title: fallbackTitle, steps: fallbackSteps) + keyLine
                 let shareUrl = URL(string: response.share_url)
+                let entries = fallbackSteps
+                    .sorted { $0.step < $1.step }
+                    .map { step in
+                        RoutineShareCardEntry(
+                            stepNumber: step.step,
+                            stepName: step.name,
+                            productName: step.product_name,
+                            productBrand: step.product_brand
+                        )
+                    }
                 await MainActor.run {
-                    var items: [Any] = [fallbackText]
-                    if let shareUrl { items.insert(shareUrl, at: 0) }
-                    shareItems = items
+                    let subtitle = routineKey.map { "Key \($0) • Share to TikTok and Instagram." } ?? "Share to TikTok, Instagram, and messages."
+                    let cardImage = renderRoutineShareCardImage(
+                        title: fallbackTitle,
+                        subtitle: subtitle,
+                        entries: Array(entries.prefix(7)),
+                        routineKey: routineKey
+                    )
+                    let items = makeRoutineShareItems(
+                        cardImage: cardImage,
+                        shareURL: shareUrl,
+                        fallbackText: fallbackText
+                    )
+                    sharePreview = RoutineSharePreviewData(
+                        title: fallbackTitle,
+                        subtitle: subtitle,
+                        routineKey: routineKey,
+                        entries: entries,
+                        cardImage: cardImage,
+                        shareItems: items
+                    )
                     isPreparingShare = false
-                    showShareSheet = true
                 }
             } catch {
                 await MainActor.run {
@@ -963,13 +1561,13 @@ struct SkinRoutineStepRow: View {
             Button(action: onToggle) {
                 ZStack {
                     Circle()
-                        .stroke(isCompleted ? accentColor : Color(hex: "DDDDDD"), lineWidth: 2)
-                        .frame(width: 26, height: 26)
+                        .stroke(isCompleted ? accentColor : Color(hex: "D4D4DB"), lineWidth: 2)
+                        .frame(width: 28, height: 28)
                     
                     if isCompleted {
                         Circle()
                             .fill(accentColor)
-                            .frame(width: 26, height: 26)
+                            .frame(width: 28, height: 28)
                         
                         Image(systemName: "checkmark")
                             .font(.system(size: 12, weight: .bold))
@@ -977,13 +1575,18 @@ struct SkinRoutineStepRow: View {
                     }
                 }
             }
+            .buttonStyle(.plain)
             
             // Step Info
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 7) {
                     Text("Step \(step.step)")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(accentColor.opacity(0.8))
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundColor(accentColor.opacity(0.95))
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(accentColor.opacity(0.12))
+                        .cornerRadius(8)
                     
                     Text("•")
                         .font(.system(size: 10))
@@ -991,44 +1594,37 @@ struct SkinRoutineStepRow: View {
                     
                     Text(step.name)
                         .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(isCompleted ? Color(hex: "AAAAAA") : Color(hex: "2D2D2D"))
+                        .foregroundColor(isCompleted ? Color(hex: "A2A2A9") : Color(hex: "252529"))
                         .strikethrough(isCompleted)
                 }
                 
                 // Product Info
                 if let productName = step.product_name, !productName.isEmpty {
-                    HStack(spacing: 4) {
+                    HStack(spacing: 5) {
                         if let brand = step.product_brand, !brand.isEmpty {
                             Text(brand)
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundColor(Color(hex: "FF6B9D"))
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundColor(Color(hex: "FF5C95"))
                         }
                         Text(productName)
-                            .font(.system(size: 12))
-                            .foregroundColor(Color(hex: "777777"))
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(Color(hex: "6D6D73"))
                             .lineLimit(1)
                         
                         if let price = step.product_price, price > 0 {
                             Text("$\(price.roundedUpPrice)")
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundColor(Color(hex: "999999"))
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundColor(Color(hex: "8B8B92"))
                         }
                     }
 
-                    if let productId = step.product_id, !productId.isEmpty {
-                        Text("ID \(productId)")
-                            .font(.system(size: 10, weight: .medium, design: .monospaced))
-                            .foregroundColor(Color(hex: "A0A0A0"))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
                 }
                 
                 // Instructions
                 if let instructions = step.instructions, !instructions.isEmpty {
                     Text(instructions)
-                        .font(.system(size: 11))
-                        .foregroundColor(Color(hex: "AAAAAA"))
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(Color(hex: "A0A0A8"))
                         .lineLimit(2)
                 }
             }
@@ -1053,8 +1649,14 @@ struct SkinRoutineStepRow: View {
                 }
             }
         }
-        .padding(.vertical, 8)
-        .padding(.horizontal, 4)
+        .padding(.vertical, 10)
+        .padding(.horizontal, 10)
+        .background(Color(hex: "FBFAFD"))
+        .cornerRadius(14)
+        .overlay(
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(Color(hex: "EFEAF0"), lineWidth: 1)
+        )
         .opacity(isCompleted ? 0.7 : 1.0)
     }
 }
@@ -1123,6 +1725,60 @@ struct TimelineRow: View {
     }
 }
 
+struct ProgressTrendBars: View {
+    let snapshots: [GlowProgressSnapshot]
+
+    private var minScore: Double {
+        Double(snapshots.map(\.score).min() ?? 0)
+    }
+
+    private var maxScore: Double {
+        Double(snapshots.map(\.score).max() ?? 100)
+    }
+
+    private func normalizedHeight(for score: Int) -> CGFloat {
+        let minH: CGFloat = 20
+        let maxH: CGFloat = 96
+        let spread = max(maxScore - minScore, 1)
+        let progress = (Double(score) - minScore) / spread
+        return minH + (maxH - minH) * CGFloat(progress)
+    }
+
+    var body: some View {
+        HStack(alignment: .bottom, spacing: 10) {
+            ForEach(snapshots) { snapshot in
+                VStack(spacing: 6) {
+                    Text("\(snapshot.score)")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundColor(Color(hex: "66666D"))
+
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(
+                            LinearGradient(
+                                colors: [Color(hex: "FF6B9D"), Color(hex: "FFB4C8")],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                        .frame(width: 20, height: normalizedHeight(for: snapshot.score))
+
+                    Text(shortDate(snapshot.recordedAt))
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(Color(hex: "9A9AA1"))
+                }
+                .frame(maxWidth: .infinity)
+            }
+        }
+        .padding(.vertical, 6)
+    }
+
+    private func shortDate(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "M/d"
+        return formatter.string(from: date)
+    }
+}
+
 // MARK: - Supporting Views
 struct QuickStat: View {
     let icon: String
@@ -1131,23 +1787,28 @@ struct QuickStat: View {
     let color: Color
     
     var body: some View {
-        VStack(spacing: 6) {
-            Image(systemName: icon)
-                .font(.system(size: 16))
-                .foregroundColor(color)
+        VStack(spacing: 8) {
+            ZStack {
+                Circle()
+                    .fill(color.opacity(0.14))
+                    .frame(width: 30, height: 30)
+                Image(systemName: icon)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(color)
+            }
             
             Text(value)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundColor(Color(hex: "2D2D2D"))
+                .font(.system(size: 14, weight: .bold))
+                .foregroundColor(Color(hex: "29292D"))
             
             Text(label)
-                .font(.system(size: 10))
-                .foregroundColor(Color(hex: "888888"))
+                .font(.system(size: 10, weight: .medium))
+                .foregroundColor(Color(hex: "8A8A92"))
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 12)
-        .background(Color(hex: "FAFAFA"))
-        .cornerRadius(12)
+        .background(Color(hex: "F9F8FB"))
+        .cornerRadius(13)
     }
 }
 

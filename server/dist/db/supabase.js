@@ -1,7 +1,11 @@
 "use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.DatabaseService = exports.supabase = void 0;
 const supabase_js_1 = require("@supabase/supabase-js");
+const crypto_1 = __importDefault(require("crypto"));
 // Supabase Configuration
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseAnonKey = process.env.SUPABASE_ANON_KEY;
@@ -20,6 +24,51 @@ const supabaseKey = supabaseServiceRoleKey || supabaseAnonKey;
 exports.supabase = (0, supabase_js_1.createClient)(supabaseUrl, supabaseKey);
 // Database service functions
 class DatabaseService {
+    static normalizeRoutineKey(input) {
+        if (!input)
+            return null;
+        const normalized = String(input)
+            .toUpperCase()
+            .replace(/[^A-Z0-9]/g, '');
+        return normalized.length >= 6 ? normalized : null;
+    }
+    static extractRoutineKey(routineData) {
+        const key = routineData?.meta?.routine_key ||
+            routineData?.routine_key ||
+            null;
+        return this.normalizeRoutineKey(key);
+    }
+    static generateRoutineKeyCandidate(length = 8) {
+        const bytes = crypto_1.default.randomBytes(length);
+        const chars = this.ROUTINE_KEY_ALPHABET;
+        let out = '';
+        for (let i = 0; i < bytes.length; i++) {
+            out += chars[bytes[i] % chars.length];
+        }
+        return out;
+    }
+    static async generateUniqueRoutineKey(maxAttempts = 8) {
+        for (let i = 0; i < maxAttempts; i++) {
+            const candidate = this.generateRoutineKeyCandidate(8);
+            const existing = await this.getRoutineByShareKey(candidate);
+            if (!existing)
+                return candidate;
+        }
+        const fallback = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
+            .toUpperCase()
+            .replace(/[^A-Z0-9]/g, '');
+        return fallback.slice(0, 12);
+    }
+    static attachRoutineKey(routineData, routineKey) {
+        const base = (routineData && typeof routineData === 'object') ? { ...routineData } : {};
+        const meta = (base.meta && typeof base.meta === 'object') ? { ...base.meta } : {};
+        meta.routine_key = routineKey;
+        return {
+            ...base,
+            routine_key: routineKey,
+            meta,
+        };
+    }
     // ═══════════════════════════════════════════════════════════════
     // USER OPERATIONS
     // ═══════════════════════════════════════════════════════════════
@@ -134,6 +183,8 @@ class DatabaseService {
     // ROUTINE OPERATIONS
     // ═══════════════════════════════════════════════════════════════
     static async saveRoutine(userId, profileId, routineData) {
+        const routineKey = await this.generateUniqueRoutineKey();
+        const enrichedRoutineData = this.attachRoutineKey(routineData, routineKey);
         // Product routines are user-owned snapshots; overwrite prior routine
         // so onboarding re-runs, chat edits, and manual edits always replace
         // stale/generated routines with the latest canonical one.
@@ -148,7 +199,7 @@ class DatabaseService {
         const insertPayload = {
             user_id: userId,
             profile_id: profileId,
-            routine_data: routineData
+            routine_data: enrichedRoutineData
         };
         let { data, error } = await exports.supabase
             .from('routines')
@@ -165,7 +216,7 @@ class DatabaseService {
                 .insert({
                 user_id: userId,
                 profile_id: null,
-                routine_data: routineData
+                routine_data: enrichedRoutineData
             })
                 .select()
                 .single());
@@ -197,6 +248,44 @@ class DatabaseService {
         if (error)
             return null;
         return data;
+    }
+    static async getRoutineByShareKey(routineKey) {
+        const normalized = this.normalizeRoutineKey(routineKey);
+        if (!normalized)
+            return null;
+        // Primary path: query by nested JSON key.
+        {
+            const { data, error } = await exports.supabase
+                .from('routines')
+                .select('*')
+                .contains('routine_data', { meta: { routine_key: normalized } })
+                .order('created_at', { ascending: false })
+                .limit(1)
+                .maybeSingle();
+            if (!error && data)
+                return data;
+        }
+        // Backward-compat path: top-level routine_data.routine_key.
+        {
+            const { data, error } = await exports.supabase
+                .from('routines')
+                .select('*')
+                .contains('routine_data', { routine_key: normalized })
+                .order('created_at', { ascending: false })
+                .limit(1)
+                .maybeSingle();
+            if (!error && data)
+                return data;
+        }
+        // Last-resort scan for environments where JSON contains filters are limited.
+        const { data: recent, error: recentError } = await exports.supabase
+            .from('routines')
+            .select('*')
+            .order('created_at', { ascending: false })
+            .limit(500);
+        if (recentError || !recent)
+            return null;
+        return recent.find((row) => this.extractRoutineKey(row?.routine_data) === normalized) || null;
     }
     // ═══════════════════════════════════════════════════════════════
     // PRODUCT OPERATIONS
@@ -721,4 +810,5 @@ class DatabaseService {
     }
 }
 exports.DatabaseService = DatabaseService;
+DatabaseService.ROUTINE_KEY_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 exports.default = exports.supabase;

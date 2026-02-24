@@ -8,6 +8,7 @@ exports.runInference = runInference;
 exports.isLLMAvailable = isLLMAvailable;
 const openai_1 = __importDefault(require("openai"));
 const supabase_1 = require("../db/supabase");
+const foundational_guidance_1 = require("./foundational-guidance");
 // Skincare product categories for filtering
 const SKINCARE_CATEGORIES = ['cleanser', 'moisturizer', 'treatment', 'serum', 'sunscreen', 'toner', 'mask', 'exfoliant', 'face', 'eye'];
 // Initialize OpenAI (only if API key is available)
@@ -59,6 +60,9 @@ function buildProfileQuery(profile) {
     }
     if (profile.skinConcerns && profile.skinConcerns.length > 0) {
         parts.push(`for concerns: ${profile.skinConcerns.join(', ')}`);
+    }
+    if (profile.looksmaxConcerns && profile.looksmaxConcerns.length > 0) {
+        parts.push(`additional looksmaxing focus: ${profile.looksmaxConcerns.join(', ')}`);
     }
     if (typeof profile.imageHydrationScore === 'number') {
         parts.push(`hydration score ${profile.imageHydrationScore.toFixed(2)}`);
@@ -332,7 +336,7 @@ async function fallbackSearch(keywords, category, maxPrice, limit = 10) {
     }));
 }
 // ─── Fine-tuned model for all inference ──────────────────────────
-const GLOWUP_MODEL = process.env.GLOWUP_CHAT_MODEL || 'ft:gpt-4o-2024-08-06:dave:glowup-product-embeds:D6KQn97D';
+const GLOWUP_MODEL = (0, foundational_guidance_1.resolveGlowupModel)('GLOWUP_INFERENCE_MODEL', 'GLOWUP_CHAT_MODEL');
 // Tool definitions for the fine-tuned model (same as chat endpoint)
 const inferenceTools = [
     {
@@ -725,6 +729,9 @@ async function generatePersonalizedRoutine(profile, products) {
     const systemPrompt = `You are GlowUp AI, a skincare expert creating a personalized routine after onboarding.
 You MUST use the search_products tool to find real products from our database for EVERY step. Do NOT invent or hallucinate product names.
 
+FOUNDATIONAL GUIDANCE:
+${foundational_guidance_1.FOUNDATIONAL_LOOKSMAX_GUIDANCE}
+
 WORKFLOW:
 1. First, call search_products multiple times to find: a cleanser, treatment/serum, moisturizer, sunscreen (AM only), and exfoliant (weekly). Filter by the user's skin type, concerns, and budget.
 2. After receiving product results, build the routine JSON using ONLY products found in tool results.
@@ -745,13 +752,15 @@ RULES:
 - Weekly reset: 1-3 steps (exfoliant, mask, or clarifying treatment).
 - Include targeted treatment steps that directly address the user's top goals/concerns (e.g. acne, dark spots, barrier repair, brightening).
 - Products can appear in multiple routines (e.g. same cleanser AM and PM).
-- product_id MUST be a real UUID from tool results — NEVER make one up.`;
+- product_id MUST be a real UUID from tool results — NEVER make one up.
+- Keep skincare as the primary focus. In "tips", include at most 2 secondary looksmax actions for smile/teeth, hair, or lifestyle if relevant.`;
     const userMessage = `Build my complete skincare routine. Here is my profile:
 
 - Skin type: ${profile.skinType}
 - Skin tone: ${skinToneLabel}
 - Goals: ${profile.skinGoals?.join(', ') || 'healthy skin'}
 - Concerns: ${profile.skinConcerns?.join(', ') || 'none specified'}
+- Looksmax concerns (secondary): ${profile.looksmaxConcerns?.join(', ') || 'none specified'}
 - Sunscreen usage: ${profile.sunscreenUsage || 'sometimes'}
 - Budget: ${profile.budget || 'medium'} (~$${budgetMax} max per product)
 - Fragrance-free: ${profile.fragranceFree ? 'yes' : 'no'}
@@ -1003,6 +1012,18 @@ function generateFallbackRoutine(profile, products) {
     }
     if (profile.sunscreenUsage !== 'daily') {
         tips.push('Daily SPF is the #1 anti-aging product - make it non-negotiable!');
+    }
+    if (profile.looksmaxConcerns?.includes('teeth_staining')) {
+        tips.push('For the next 2 weeks, reduce coffee/tea frequency and rinse after each cup to improve smile brightness.');
+    }
+    if (profile.looksmaxConcerns?.includes('bloating')) {
+        tips.push('To de-bloat your face, reduce added sugar and high-sodium meals for 10-14 days and hydrate consistently.');
+    }
+    if (profile.looksmaxConcerns?.includes('eye_bags')) {
+        tips.push('Prioritize 7-8 hours of sleep and keep sodium lower at night to reduce under-eye puffiness.');
+    }
+    if (profile.looksmaxConcerns?.includes('thinning')) {
+        tips.push('Use gentle scalp care, limit heat styling, and prioritize protein intake for stronger hair density.');
     }
     // Ensure we have at least 3 tips
     while (tips.length < 3) {

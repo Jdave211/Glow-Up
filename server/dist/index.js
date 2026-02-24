@@ -10,9 +10,11 @@ const cors_1 = __importDefault(require("cors"));
 const body_parser_1 = __importDefault(require("body-parser"));
 const jwt = require('jsonwebtoken');
 const crypto_1 = require("crypto");
+const openai_1 = __importDefault(require("openai"));
 const supabase_1 = require("./db/supabase");
 const apple_1 = require("./auth/apple");
 const inference_1 = require("./inference");
+const foundational_guidance_1 = require("./inference/foundational-guidance");
 if (process.env.NODE_ENV === 'production') {
     const requiredEnv = [
         'JWT_SECRET',
@@ -47,6 +49,14 @@ app.get('/healthz', (_req, res) => {
         timestamp: new Date().toISOString(),
         environment: process.env.NODE_ENV || 'development',
         llm_available: (0, inference_1.isLLMAvailable)(),
+        models: {
+            foundation: (0, foundational_guidance_1.resolveGlowupModel)('GLOWUP_FOUNDATION_MODEL', 'GLOWUP_CHAT_MODEL'),
+            chat: (0, foundational_guidance_1.resolveGlowupModel)('GLOWUP_CHAT_MODEL'),
+            inference: (0, foundational_guidance_1.resolveGlowupModel)('GLOWUP_INFERENCE_MODEL', 'GLOWUP_CHAT_MODEL'),
+            feed: (0, foundational_guidance_1.resolveGlowupModel)('GLOWUP_FEED_MODEL', 'GLOWUP_CHAT_MODEL'),
+            cart: (0, foundational_guidance_1.resolveGlowupModel)('GLOWUP_CART_MODEL', 'GLOWUP_CHAT_MODEL'),
+            routine_integration: (0, foundational_guidance_1.resolveGlowupModel)('GLOWUP_ROUTINE_INTEGRATION_MODEL', 'GLOWUP_CHAT_MODEL'),
+        },
     });
 });
 // ─────────────────────────────────────────────────────────────────
@@ -381,8 +391,8 @@ async function budgetOptimizationAgent(products, profile) {
 app.get('/', (req, res) => {
     res.json({
         status: 'ok',
-        message: '🧠 GlowUp Multi-Agent API v2.0',
-        agents: ['Skin Analysis', 'Hair Analysis', 'Product Matching', 'Budget Optimization']
+        message: '🧠 GlowUp Looksmaxing API v2.1',
+        agents: ['Skin Analysis', 'Hair/Smile Signals', 'Product Matching', 'Budget Optimization']
     });
 });
 function deriveConcernSignalsFromImageAnalysis(imageAnalysis) {
@@ -391,6 +401,9 @@ function deriveConcernSignalsFromImageAnalysis(imageAnalysis) {
     const concerns = new Set();
     const detected = Array.isArray(imageAnalysis.skin?.concerns_detected)
         ? imageAnalysis.skin.concerns_detected.map((c) => String(c).toLowerCase())
+        : [];
+    const looksmaxDetected = Array.isArray(imageAnalysis.looksmax_concerns)
+        ? imageAnalysis.looksmax_concerns.map((c) => String(c).toLowerCase())
         : [];
     for (const concern of detected) {
         if (concern.includes('texture'))
@@ -412,7 +425,64 @@ function deriveConcernSignalsFromImageAnalysis(imageAnalysis) {
         concerns.add('dryness');
     if (!Number.isNaN(oiliness) && oiliness > 0.62)
         concerns.add('oiliness');
+    for (const concern of looksmaxDetected) {
+        if (concern.includes('teeth'))
+            concerns.add('teeth_staining');
+        if (concern.includes('bloat'))
+            concerns.add('bloating');
+        if (concern.includes('eye_bag') || concern.includes('under_eye'))
+            concerns.add('eye_bags');
+        if (concern.includes('hair') && concern.includes('thin'))
+            concerns.add('hair_thinning');
+    }
     return Array.from(concerns);
+}
+function normalizeConcernTag(value) {
+    return String(value || '')
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, '_');
+}
+function buildLooksmaxTips(profile, imageAnalysis) {
+    const tips = [];
+    const concernSet = new Set();
+    const profileConcerns = Array.isArray(profile?.concerns) ? profile.concerns : [];
+    for (const c of profileConcerns)
+        concernSet.add(normalizeConcernTag(c));
+    const detectedSkinConcerns = Array.isArray(imageAnalysis?.skin?.concerns_detected)
+        ? imageAnalysis.skin.concerns_detected
+        : [];
+    for (const c of detectedSkinConcerns)
+        concernSet.add(normalizeConcernTag(c));
+    const detectedLooksmaxConcerns = Array.isArray(imageAnalysis?.looksmax_concerns)
+        ? imageAnalysis.looksmax_concerns
+        : [];
+    for (const c of detectedLooksmaxConcerns)
+        concernSet.add(normalizeConcernTag(c));
+    const modelActions = Array.isArray(imageAnalysis?.looksmax_actions)
+        ? imageAnalysis.looksmax_actions.map((a) => String(a).trim()).filter(Boolean)
+        : [];
+    tips.push(...modelActions);
+    const has = (...tokens) => tokens.some((t) => concernSet.has(t));
+    if (has('acne', 'breakouts', 'pimples', 'pimple', 'acne_breakouts')) {
+        tips.push('For the next 14 days, reduce added sugar and saturated fats to calm breakout inflammation.');
+    }
+    if (has('bloating', 'facial_bloating')) {
+        tips.push('To de-bloat facially, lower sodium and sugary snacks for 10-14 days and increase water intake.');
+    }
+    if (has('teeth_staining', 'yellow_teeth')) {
+        tips.push('For a brighter smile, limit staining drinks, rinse after coffee/tea, and use a whitening routine 2-3x/week.');
+    }
+    if (has('eye_bags', 'under_eye_bags', 'puffy_eyes')) {
+        tips.push('Prioritize 7-8 hours sleep and avoid late high-salt meals to reduce under-eye puffiness.');
+    }
+    if (has('hair_thinning', 'thinning')) {
+        tips.push('Support hair density with protein-rich meals, gentle scalp care, and reduced heat styling frequency.');
+    }
+    if (has('frizz')) {
+        tips.push('Use a humidity-protective leave-in and avoid aggressive towel drying to keep hair smoother.');
+    }
+    return Array.from(new Set(tips)).slice(0, 6);
 }
 // Main analysis endpoint - uses LLM inference with RAG
 // Now also accepts userId to auto-save the generated routine to DB
@@ -444,7 +514,8 @@ app.post('/api/analyze', async (req, res) => {
                 skinGoals: profile.skinGoals,
                 skinConcerns: mergedConcerns.filter((c) => ['acne', 'aging', 'dryness', 'oiliness', 'pigmentation', 'sensitivity', 'redness', 'texture', 'dark_spots'].includes(c)),
                 hairType: profile.hairType,
-                hairConcerns: mergedConcerns.filter((c) => ['frizz', 'damage', 'breakage', 'oily_scalp', 'dry_scalp', 'thinning', 'color_damage', 'heat_damage'].includes(c)),
+                hairConcerns: mergedConcerns.filter((c) => ['frizz', 'damage', 'breakage', 'oily_scalp', 'dry_scalp', 'thinning', 'hair_thinning', 'color_damage', 'heat_damage'].includes(c)),
+                looksmaxConcerns: mergedConcerns.filter((c) => ['eye_bags', 'under_eye_bags', 'teeth_staining', 'yellow_teeth', 'bloating', 'facial_bloating', 'hair_thinning', 'thinning', 'frizz', 'jawline_definition'].includes(c)),
                 washFrequency: profile.washFrequency,
                 sunscreenUsage: profile.sunscreenUsage,
                 budget: profile.budget,
@@ -456,6 +527,8 @@ app.post('/api/analyze', async (req, res) => {
                 imageTextureScore: Number.isFinite(textureScore) ? textureScore : undefined,
             };
             const inferenceResult = await (0, inference_1.runInference)(inferenceProfile);
+            const looksmaxTips = buildLooksmaxTips(profile, savedSkinProfile?.image_analysis);
+            inferenceResult.personalized_tips = Array.from(new Set([...(looksmaxTips || []), ...(inferenceResult.personalized_tips || [])])).slice(0, 8);
             // ── Auto-save the product-enriched routine for this user ──
             let routineId = null;
             if (userId) {
@@ -895,7 +968,8 @@ function mapDbProfileToInference(profile) {
         skinGoals: Array.isArray(profile?.skin_goals) ? profile.skin_goals : [],
         skinConcerns: mergedSkinConcerns.filter((c) => ['acne', 'aging', 'dryness', 'oiliness', 'pigmentation', 'sensitivity', 'redness', 'texture', 'dark_spots'].includes(c)),
         hairType: profile?.hair_type || undefined,
-        hairConcerns: hairConcerns.filter((c) => ['frizz', 'damage', 'breakage', 'oily_scalp', 'dry_scalp', 'thinning', 'color_damage', 'heat_damage'].includes(c)),
+        hairConcerns: hairConcerns.filter((c) => ['frizz', 'damage', 'breakage', 'oily_scalp', 'dry_scalp', 'thinning', 'hair_thinning', 'color_damage', 'heat_damage'].includes(c)),
+        looksmaxConcerns: mergedSkinConcerns.filter((c) => ['eye_bags', 'under_eye_bags', 'teeth_staining', 'yellow_teeth', 'bloating', 'facial_bloating', 'hair_thinning', 'thinning', 'frizz', 'jawline_definition'].includes(c)),
         washFrequency: profile?.wash_frequency || undefined,
         sunscreenUsage: profile?.sunscreen_usage || undefined,
         budget: profile?.budget || 'medium',
@@ -1125,10 +1199,16 @@ app.post('/api/routine/update', async (req, res) => {
         if (!saved) {
             return res.status(500).json({ error: 'Failed to save routine' });
         }
+        const routineKey = supabase_1.DatabaseService.extractRoutineKey(saved.routine_data);
         // Bust per-user cached surfaces so edits are reflected immediately.
         feedCache.delete(`feed:${userId}`);
         skinPageCache.delete(`skin-page:${userId}`);
-        res.json({ success: true, routine_id: saved.id, routine: payload.inference.routine });
+        res.json({
+            success: true,
+            routine_id: saved.id,
+            routine_key: routineKey,
+            routine: payload.inference.routine,
+        });
     }
     catch (error) {
         console.error('Routine update error:', error?.message);
@@ -1215,13 +1295,22 @@ app.post('/api/routine/share', async (req, res) => {
         if (!profile)
             return res.status(404).json({ error: 'Profile not found' });
         const latestRoutine = await supabase_1.DatabaseService.getLatestRoutine(userId);
-        const ensuredRoutine = await ensureUserHasProductRoutine(userId, profile, latestRoutine);
+        let ensuredRoutine = await ensureUserHasProductRoutine(userId, profile, latestRoutine);
         if (!ensuredRoutine?.routine_data) {
             return res.status(404).json({ error: 'No routine found' });
+        }
+        let routineKey = supabase_1.DatabaseService.extractRoutineKey(ensuredRoutine.routine_data);
+        if (!routineKey) {
+            const resaved = await supabase_1.DatabaseService.saveRoutine(userId, ensuredRoutine.profile_id || profile.id || userId, ensuredRoutine.routine_data);
+            if (resaved?.routine_data) {
+                ensuredRoutine = resaved;
+                routineKey = supabase_1.DatabaseService.extractRoutineKey(ensuredRoutine.routine_data);
+            }
         }
         const routinePayload = buildRoutineSharePayload(ensuredRoutine.routine_data, selectedType);
         const tokenPayload = {
             userId,
+            routineKey,
             routineType: selectedType,
             routine: routinePayload,
             issuedAt: new Date().toISOString(),
@@ -1234,6 +1323,7 @@ app.post('/api/routine/share', async (req, res) => {
             success: true,
             share_url: shareUrl,
             app_deep_link: appDeepLink,
+            routine_key: routineKey,
             routine_type: selectedType,
         });
     }
@@ -1242,11 +1332,60 @@ app.post('/api/routine/share', async (req, res) => {
         res.status(500).json({ error: 'Failed to create routine share link' });
     }
 });
+app.get('/api/routine/share/:token', async (req, res) => {
+    try {
+        const decoded = jwt.verify(req.params.token, ROUTINE_SHARE_SECRET);
+        const routine = decoded?.routine || { morning: [], evening: [], weekly: [] };
+        res.json({
+            success: true,
+            routine_key: decoded?.routineKey || null,
+            routine_type: decoded?.routineType || 'all',
+            routine: {
+                morning: Array.isArray(routine.morning) ? routine.morning : [],
+                evening: Array.isArray(routine.evening) ? routine.evening : [],
+                weekly: Array.isArray(routine.weekly) ? routine.weekly : [],
+            },
+            issued_at: decoded?.issuedAt || null,
+            source_user_id: decoded?.userId || null,
+        });
+    }
+    catch (error) {
+        res.status(400).json({ error: 'Invalid or expired routine share link.' });
+    }
+});
+app.get('/api/routine/by-key/:routineKey', async (req, res) => {
+    try {
+        const normalized = supabase_1.DatabaseService.normalizeRoutineKey(req.params.routineKey);
+        if (!normalized) {
+            return res.status(400).json({ error: 'Invalid routine key.' });
+        }
+        const routineRow = await supabase_1.DatabaseService.getRoutineByShareKey(normalized);
+        if (!routineRow?.routine_data) {
+            return res.status(404).json({ error: 'Routine not found for that key.' });
+        }
+        const routinePayload = buildRoutineSharePayload(routineRow.routine_data, 'all');
+        const routineKey = supabase_1.DatabaseService.extractRoutineKey(routineRow.routine_data) || normalized;
+        res.json({
+            success: true,
+            routine_key: routineKey,
+            routine_type: 'all',
+            routine: routinePayload,
+            source_user_id: routineRow.user_id,
+            routine_id: routineRow.id,
+            issued_at: routineRow.created_at,
+        });
+    }
+    catch (error) {
+        console.error('Routine by-key lookup error:', error?.message);
+        res.status(500).json({ error: 'Failed to fetch routine by key' });
+    }
+});
 app.get('/share/routine/:token', async (req, res) => {
     try {
         const decoded = jwt.verify(req.params.token, ROUTINE_SHARE_SECRET);
         const routine = decoded?.routine || { morning: [], evening: [], weekly: [] };
         const deepLink = `glowup://routine/shared?token=${encodeURIComponent(req.params.token)}`;
+        const routineKey = supabase_1.DatabaseService.normalizeRoutineKey(decoded?.routineKey || null);
         const morningHtml = renderRoutineSectionHtml('Morning Glow', routine.morning || []);
         const eveningHtml = renderRoutineSectionHtml('Evening Repair', routine.evening || []);
         const weeklyHtml = renderRoutineSectionHtml('Weekly Reset', routine.weekly || []);
@@ -1257,6 +1396,11 @@ app.get('/share/routine/:token', async (req, res) => {
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Shared GlowUp Routine</title>
+  <meta property="og:title" content="Shared GlowUp Routine" />
+  <meta property="og:description" content="Open in GlowUp to import this routine and track your progress." />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="${req.protocol}://${req.get('host')}${req.originalUrl}" />
+  <meta name="twitter:card" content="summary_large_image" />
   <style>
     :root { --pink:#ff6b9d; --rose:#ff8aaf; --ink:#232323; --muted:#6f6f6f; --bg1:#fff5fa; --bg2:#ffe8f1; }
     *{box-sizing:border-box}
@@ -1285,20 +1429,39 @@ app.get('/share/routine/:token', async (req, res) => {
 </head>
 <body>
   <main class="wrap">
-    <section class="hero">
-      <span class="badge">Shared from GlowUp</span>
-      <h1>Skincare Routine</h1>
-      <p class="sub">Open in GlowUp to personalize, track streaks, and shop your exact routine.</p>
-      <div class="actions">
-        <a class="btn btn-primary" href="${deepLink}">Open in GlowUp App</a>
-        <a class="btn btn-secondary" href="${APP_STORE_URL}">Get GlowUp</a>
-      </div>
-    </section>
+	    <section class="hero">
+	      <span class="badge">Shared from GlowUp</span>
+	      <h1>Skincare Routine</h1>
+	      <p class="sub">Open in GlowUp to add this routine to your library, personalize it, and track streaks.</p>
+	      ${routineKey ? `<p class="sub" style="margin-top:8px"><strong>Routine Key:</strong> <code>${escapeHtml(routineKey)}</code></p>` : ''}
+	      <div class="actions">
+	        <a class="btn btn-primary" href="${deepLink}">Add To GlowUp</a>
+	        <a class="btn btn-secondary" href="${APP_STORE_URL}">Get GlowUp</a>
+	      </div>
+	    </section>
     ${morningHtml}
     ${eveningHtml}
     ${weeklyHtml}
     <p class="foot">Shared routine links expire in 30 days for privacy.</p>
   </main>
+  <script>
+    (function () {
+      var deepLink = ${JSON.stringify(deepLink)};
+      var appStoreUrl = ${JSON.stringify(APP_STORE_URL)};
+      var didHide = false;
+      document.addEventListener('visibilitychange', function () {
+        if (document.visibilityState === 'hidden') didHide = true;
+      });
+      window.setTimeout(function () {
+        window.location.href = deepLink;
+      }, 80);
+      window.setTimeout(function () {
+        if (!didHide) {
+          window.location.href = appStoreUrl;
+        }
+      }, 1800);
+    })();
+  </script>
 </body>
 </html>`;
         res.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -1511,7 +1674,7 @@ app.post('/api/cart/analyze', async (req, res) => {
         let results = [];
         if (openaiChat && products.length > 0) {
             try {
-                const cartModel = process.env.GLOWUP_CART_MODEL || 'gpt-4o-mini';
+                const cartModel = CART_MODEL;
                 const prompt = `
 You are GlowUp's cart advisor. Given a user's skin profile, current routine, and a list of products, rate each product's fit for their skin.
 
@@ -1581,37 +1744,89 @@ ${JSON.stringify(products.map((p) => ({
         res.status(500).json({ error: 'Server error' });
     }
 });
-// ═══════════════════════════════════════════════════════════════
-// INTEGRATE PURCHASED PRODUCT INTO ROUTINE
-// ═══════════════════════════════════════════════════════════════
-app.post('/api/routine/integrate-product', async (req, res) => {
+function parseModelJsonPayload(content) {
+    const trimmed = String(content || '').trim();
+    if (!trimmed)
+        return null;
+    const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    const candidate = (fenced?.[1] || trimmed).trim();
     try {
-        const { userId, productId } = req.body;
-        if (!userId || !productId) {
-            return res.status(400).json({ error: 'userId and productId are required' });
+        return JSON.parse(candidate);
+    }
+    catch {
+        const jsonMatch = candidate.match(/(\[[\s\S]*\]|\{[\s\S]*\})/);
+        if (!jsonMatch)
+            return null;
+        try {
+            return JSON.parse(jsonMatch[1]);
         }
-        // Fetch product + user profile + current routine
-        const [productRow, profile, routineRow] = await Promise.all([
+        catch {
+            return null;
+        }
+    }
+}
+function normalizeRoutinePlacements(raw) {
+    const input = Array.isArray(raw?.placements)
+        ? raw.placements
+        : (Array.isArray(raw) ? raw : (raw ? [raw] : []));
+    const normalized = [];
+    for (const item of input) {
+        const routineType = String(item?.routine_type || '').toLowerCase();
+        if (!['morning', 'evening', 'weekly'].includes(routineType))
+            continue;
+        const action = String(item?.action || '').toLowerCase() === 'replace' ? 'replace' : 'add';
+        const stepIndex = Number.isFinite(Number(item?.step_index)) ? Number(item.step_index) : undefined;
+        normalized.push({
+            action,
+            routine_type: routineType,
+            step_index: action === 'replace' ? stepIndex : undefined,
+            step_name: typeof item?.step_name === 'string' ? item.step_name : undefined,
+            reason: typeof item?.reason === 'string' ? item.reason : undefined,
+        });
+    }
+    return normalized;
+}
+async function integrateProductIntoRoutine(userId, productId) {
+    try {
+        const [productRows, profile, routineRow] = await Promise.all([
             supabase_1.DatabaseService.getProductsByIds([productId]),
             supabase_1.DatabaseService.getSkinProfileByUserId(userId),
             supabase_1.DatabaseService.getLatestRoutine(userId),
         ]);
-        if (!productRow || productRow.length === 0) {
-            return res.status(404).json({ error: 'Product not found' });
+        if (!productRows || productRows.length === 0) {
+            return { success: false, error: 'Product not found' };
         }
         if (!profile) {
-            return res.status(404).json({ error: 'No skin profile found' });
+            return { success: false, error: 'No skin profile found' };
         }
-        const product = productRow[0];
-        const routineData = routineRow?.routine_data?.inference?.routine || routineRow?.routine_data?.routine || { morning: [], evening: [], weekly: [] };
-        // Use LLM to determine where the product fits
-        if (openaiChat) {
-            const routineSummary = JSON.stringify({
-                morning: (routineData.morning || []).map((s) => ({ step: s.step, name: s.name, product_name: s.product?.name || s.product_name || 'Generic' })),
-                evening: (routineData.evening || []).map((s) => ({ step: s.step, name: s.name, product_name: s.product?.name || s.product_name || 'Generic' })),
-                weekly: (routineData.weekly || []).map((s) => ({ step: s.step, name: s.name, product_name: s.product?.name || s.product_name || 'Generic' })),
-            });
-            const prompt = `You are GlowUp's routine optimizer. A user just purchased a new product. Determine where it fits in their existing routine.
+        if (!openaiChat) {
+            return { success: false, error: 'Model unavailable for routine integration' };
+        }
+        const product = productRows[0];
+        const routineData = routineRow?.routine_data?.inference?.routine ||
+            routineRow?.routine_data?.routine ||
+            { morning: [], evening: [], weekly: [] };
+        const routineSummary = JSON.stringify({
+            morning: (routineData.morning || []).map((s) => ({
+                step: s.step,
+                name: s.name,
+                product_name: s.product?.name || s.product_name || 'Generic'
+            })),
+            evening: (routineData.evening || []).map((s) => ({
+                step: s.step,
+                name: s.name,
+                product_name: s.product?.name || s.product_name || 'Generic'
+            })),
+            weekly: (routineData.weekly || []).map((s) => ({
+                step: s.step,
+                name: s.name,
+                product_name: s.product?.name || s.product_name || 'Generic'
+            })),
+        });
+        const prompt = `You are GlowUp's routine optimizer. A user just added a new product and the routine should update automatically.
+
+FOUNDATIONAL GUIDANCE:
+${foundational_guidance_1.FOUNDATIONAL_LOOKSMAX_GUIDANCE}
 
 PRODUCT:
 - Name: ${product.name}
@@ -1624,7 +1839,7 @@ USER SKIN: ${profile.skin_type}, concerns: ${(profile.skin_concerns || []).join(
 CURRENT ROUTINE:
 ${routineSummary}
 
-Respond with JSON:
+Return STRICT JSON (no markdown), either a single object or array:
 {
   "action": "replace" | "add",
   "routine_type": "morning" | "evening" | "weekly",
@@ -1633,92 +1848,105 @@ Respond with JSON:
   "reason": "Why this product fits here"
 }
 
-If the product replaces an existing step (same category), use "replace" and specify the step_index (0-based). If it's a new category, use "add".
-If the product fits both morning and evening (like a cleanser), respond with an array of two objects.`;
-            try {
-                const completion = await openaiChat.chat.completions.create({
-                    model: 'gpt-4o-mini',
-                    messages: [
-                        { role: 'system', content: 'You output strict JSON only.' },
-                        { role: 'user', content: prompt }
-                    ],
-                    temperature: 0.2,
-                    max_tokens: 400
-                });
-                const content = completion.choices[0]?.message?.content || '';
-                let jsonStr = content;
-                const jsonMatch = content.match(/[\[{][\s\S]*[\]}]/);
-                if (jsonMatch)
-                    jsonStr = jsonMatch[0];
-                let placements = JSON.parse(jsonStr);
-                if (!Array.isArray(placements))
-                    placements = [placements];
-                // Apply placements to routine
-                const newRoutine = {
-                    morning: [...(routineData.morning || [])],
-                    evening: [...(routineData.evening || [])],
-                    weekly: [...(routineData.weekly || [])],
-                };
-                const productEntry = {
-                    product: {
-                        id: product.id,
-                        name: product.name,
-                        brand: product.brand,
-                        price: product.price,
-                        category: product.category,
-                        image_url: product.image_url,
-                        buy_link: product.buy_link,
-                        rating: product.rating,
-                    }
-                };
-                for (const placement of placements) {
-                    const key = placement.routine_type;
-                    if (!newRoutine[key])
-                        continue;
-                    if (placement.action === 'replace' && typeof placement.step_index === 'number' && newRoutine[key][placement.step_index]) {
-                        newRoutine[key][placement.step_index] = {
-                            ...newRoutine[key][placement.step_index],
-                            ...productEntry,
-                            product_name: product.name,
-                            product_brand: product.brand,
-                            product_price: product.price,
-                            product_image: product.image_url,
-                            product_id: product.id,
-                        };
-                    }
-                    else {
-                        // Add as new step
-                        newRoutine[key].push({
-                            step: newRoutine[key].length + 1,
-                            name: placement.step_name || product.category || 'New Step',
-                            instructions: placement.reason || '',
-                            frequency: key === 'weekly' ? 'weekly' : 'daily',
-                            ...productEntry,
-                            product_name: product.name,
-                            product_brand: product.brand,
-                            product_price: product.price,
-                            product_image: product.image_url,
-                            product_id: product.id,
-                        });
-                    }
-                }
-                // Save updated routine
-                const saved = await supabase_1.DatabaseService.saveRoutine(userId, profile.id, {
-                    inference: {
-                        routine: newRoutine,
-                        summary: routineRow?.routine_data?.inference?.summary || 'Updated routine',
-                        personalized_tips: routineRow?.routine_data?.inference?.personalized_tips || [],
-                    },
-                });
-                console.log(`✅ Integrated product ${product.name} into routine for user ${userId}`);
-                return res.json({ success: true, placements, routine_id: saved?.id || null });
-            }
-            catch (err) {
-                console.error('LLM integration failed:', err?.message);
-                return res.status(500).json({ error: 'Failed to integrate product' });
-            }
+Rules:
+- Use "replace" when the same function/category already exists.
+- Use "add" when this fills a missing routine function.
+- A cleanser can be used in both morning and evening, so array output is allowed.
+- Keep total steps practical (morning/evening <= 5, weekly <= 3).`;
+        const completion = await openaiChat.chat.completions.create({
+            model: ROUTINE_INTEGRATION_MODEL,
+            messages: [
+                { role: 'system', content: 'You output strict JSON only.' },
+                { role: 'user', content: prompt }
+            ],
+            temperature: 0.2,
+            max_tokens: 500
+        });
+        const content = completion.choices[0]?.message?.content || '';
+        const parsed = parseModelJsonPayload(content);
+        const placements = normalizeRoutinePlacements(parsed);
+        if (placements.length === 0) {
+            return { success: false, error: 'No valid routine placements returned by model' };
         }
-        res.status(500).json({ error: 'LLM not available for integration' });
+        const newRoutine = {
+            morning: [...(routineData.morning || [])],
+            evening: [...(routineData.evening || [])],
+            weekly: [...(routineData.weekly || [])],
+        };
+        const productEntry = {
+            product: {
+                id: product.id,
+                name: product.name,
+                brand: product.brand,
+                price: product.price,
+                category: product.category,
+                image_url: product.image_url,
+                buy_link: product.buy_link,
+                rating: product.rating,
+            },
+            product_name: product.name,
+            product_brand: product.brand,
+            product_price: product.price,
+            product_image: product.image_url,
+            product_id: product.id,
+        };
+        for (const placement of placements) {
+            const bucket = placement.routine_type;
+            const steps = newRoutine[bucket];
+            if (!Array.isArray(steps))
+                continue;
+            if (placement.action === 'replace' && Number.isFinite(placement.step_index)) {
+                const idx = Number(placement.step_index);
+                if (idx >= 0 && idx < steps.length) {
+                    steps[idx] = {
+                        ...steps[idx],
+                        ...productEntry,
+                    };
+                    continue;
+                }
+            }
+            steps.push({
+                step: steps.length + 1,
+                name: placement.step_name || product.category || 'New Step',
+                instructions: placement.reason || '',
+                frequency: bucket === 'weekly' ? 'weekly' : 'daily',
+                ...productEntry,
+            });
+        }
+        ['morning', 'evening', 'weekly'].forEach((bucket) => {
+            newRoutine[bucket] = newRoutine[bucket].map((step, index) => ({
+                ...step,
+                step: index + 1,
+            }));
+        });
+        const saved = await supabase_1.DatabaseService.saveRoutine(userId, profile.id, {
+            inference: {
+                routine: newRoutine,
+                summary: routineRow?.routine_data?.inference?.summary || 'Updated routine',
+                personalized_tips: routineRow?.routine_data?.inference?.personalized_tips || [],
+            },
+        });
+        return { success: true, placements, routine_id: saved?.id || null };
+    }
+    catch (error) {
+        return { success: false, error: error?.message || 'Routine integration failed' };
+    }
+}
+// ═══════════════════════════════════════════════════════════════
+// INTEGRATE PURCHASED PRODUCT INTO ROUTINE
+// ═══════════════════════════════════════════════════════════════
+app.post('/api/routine/integrate-product', async (req, res) => {
+    try {
+        const { userId, productId } = req.body;
+        if (!userId || !productId) {
+            return res.status(400).json({ error: 'userId and productId are required' });
+        }
+        const result = await integrateProductIntoRoutine(userId, productId);
+        if (!result.success) {
+            const isNotFound = (result.error || '').toLowerCase().includes('not found');
+            return res.status(isNotFound ? 404 : 500).json({ error: result.error || 'Failed to integrate product' });
+        }
+        res.json(result);
     }
     catch (error) {
         console.error('Error integrating product:', error);
@@ -2109,7 +2337,7 @@ async function analyzeImagesWithVisionModel(imageUrls) {
         messages: [
             {
                 role: 'system',
-                content: 'Analyze onboarding skin photos for skincare routine generation. Return ONLY JSON with keys: detected_tone, detected_type, oiliness_score, hydration_score, texture_score, concerns_detected (array of short strings), redness_areas (array), pore_visibility (low|moderate|high), confidence (0-1). Scores must be numbers between 0 and 1.'
+                content: 'Analyze onboarding face photos for objective looksmaxing guidance. Return ONLY JSON with keys: detected_tone, detected_type, oiliness_score, hydration_score, texture_score, concerns_detected (array), redness_areas (array), pore_visibility (low|moderate|high), confidence (0-1), looksmax_concerns (array of tags), looksmax_actions (array of concise actions). Scores must be numbers between 0 and 1.'
             },
             {
                 role: 'user',
@@ -2136,10 +2364,16 @@ async function analyzeImagesWithVisionModel(imageUrls) {
             ? String(parsed.pore_visibility).toLowerCase()
             : 'moderate',
         confidence: Number(clamp01(Number(parsed.confidence || 0.7))),
+        looksmax_concerns: Array.isArray(parsed.looksmax_concerns)
+            ? parsed.looksmax_concerns.slice(0, 8).map((v) => normalizeConcernTag(v)).filter(Boolean)
+            : [],
+        looksmax_actions: Array.isArray(parsed.looksmax_actions)
+            ? parsed.looksmax_actions.slice(0, 8).map((v) => String(v).trim()).filter(Boolean)
+            : [],
     };
 }
 async function analyzeImages(photos) {
-    const refs = [photos.front, photos.left, photos.right].filter(Boolean);
+    const refs = [photos.front, photos.left, photos.right, photos.scalp].filter(Boolean);
     if (refs.length === 0)
         return null;
     const signedOrRawUrls = await Promise.all(refs.map(async (ref) => {
@@ -2184,6 +2418,8 @@ async function analyzeImages(photos) {
             skin_analysis: Number(clamp01(Number(skinSignals.confidence || 0.72)).toFixed(2)),
             hair_analysis: 0.0
         },
+        looksmax_concerns: Array.isArray(skinSignals.looksmax_concerns) ? skinSignals.looksmax_concerns : [],
+        looksmax_actions: Array.isArray(skinSignals.looksmax_actions) ? skinSignals.looksmax_actions : [],
         recommendations_from_analysis: [
             skinSignals.hydration_score < 0.45 ? 'Prioritize hydration and barrier support in your routine.' : 'Maintain hydration with a lightweight humectant serum.',
             skinSignals.oiliness_score > 0.6 ? 'Use oil-balancing cleanser and non-comedogenic moisturizers.' : 'Use gentle cleanse and avoid over-stripping.',
@@ -2496,12 +2732,14 @@ app.post('/api/insights', async (req, res) => {
     }
 });
 // ═══════════════════════════════════════════════════════════════
-// CHAT ENDPOINT (GPT-4o-mini powered)
+// CHAT ENDPOINT (foundation model + tool calling)
 // ═══════════════════════════════════════════════════════════════
-const openai_1 = __importDefault(require("openai"));
 const openaiChat = process.env.OPENAI_API_KEY
     ? new openai_1.default({ apiKey: process.env.OPENAI_API_KEY })
     : null;
+const CHAT_MODEL = (0, foundational_guidance_1.resolveGlowupModel)('GLOWUP_CHAT_MODEL');
+const CART_MODEL = (0, foundational_guidance_1.resolveGlowupModel)('GLOWUP_CART_MODEL', 'GLOWUP_CHAT_MODEL');
+const ROUTINE_INTEGRATION_MODEL = (0, foundational_guidance_1.resolveGlowupModel)('GLOWUP_ROUTINE_INTEGRATION_MODEL', 'GLOWUP_CHAT_MODEL');
 // ═══════════════════════════════════════════════════════════════
 // CHAT TOOL DEFINITIONS — model can call these dynamically
 // ═══════════════════════════════════════════════════════════════
@@ -2991,7 +3229,16 @@ async function executeChatTool(toolName, args, userId) {
                 const ok = await supabase_1.DatabaseService.upsertCartItem(userId, productId, quantity);
                 if (!ok)
                     return JSON.stringify({ error: 'Failed to add to cart' });
-                return JSON.stringify({ success: true, product_id: productId, quantity });
+                const shouldAutoIntegrate = String(process.env.GLOWUP_AUTO_ROUTINE_UPDATE_ON_CART || 'true').toLowerCase() !== 'false';
+                const routineIntegration = shouldAutoIntegrate
+                    ? await integrateProductIntoRoutine(userId, productId)
+                    : { success: false, error: 'Auto routine integration disabled' };
+                return JSON.stringify({
+                    success: true,
+                    product_id: productId,
+                    quantity,
+                    routine_integration: routineIntegration
+                });
             }
             case 'remove_from_cart': {
                 if (!userId)
@@ -3100,7 +3347,7 @@ app.post('/api/chat/guest', async (req, res) => {
             });
         }
         const configuredGuestModel = process.env.GLOWUP_GUEST_CHAT_MODEL;
-        const modelCandidates = Array.from(new Set([configuredGuestModel, 'gpt-4.1-nano', 'gpt-4.1-mini', 'gpt-4o-mini']
+        const modelCandidates = Array.from(new Set([configuredGuestModel, CHAT_MODEL, 'gpt-4.1-mini', 'gpt-4o-mini']
             .filter((m) => !!m && m.trim().length > 0)));
         const systemPrompt = `You are GlowUp Guest Assistant inside the GlowUp iOS app.
 
@@ -3109,7 +3356,7 @@ You are in guest mode. Give useful, safe, basic skincare guidance with lightweig
 What GlowUp does:
 - GlowUp helps users improve skin with AI-guided routines, product discovery, and progress workflows.
 - Signed-in users can save routines, keep conversation history, and track improvements over time.
-- Premium (GlowUp+, $1.99/month) adds enhanced AI help, smart price scouting, free shipping perks, and expanded catalog access.
+- Premium plans add enhanced AI help, smart price scouting, and deeper personalization.
 
 Guest-mode rules:
 - Use only the conversation provided in this request. There is no long-term memory.
@@ -3117,6 +3364,9 @@ Guest-mode rules:
 - Do not claim you can access user profile data, photos, or saved history.
 - Do not diagnose medical conditions. For severe or persistent issues, suggest seeing a dermatologist.
 - No tool calling, no product-card syntax, no fabricated app data.
+
+Foundational guidance:
+${foundational_guidance_1.FOUNDATIONAL_LOOKSMAX_GUIDANCE}
 
 Account and premium guidance:
 - When relevant, briefly mention that creating an account unlocks personalization and saved progress.
@@ -3182,7 +3432,7 @@ app.post('/api/chat', async (req, res) => {
                 message: "I'm having trouble connecting right now. In the meantime: stay consistent with your routine, drink water, and never skip SPF! ✨"
             });
         }
-        const chatModel = process.env.GLOWUP_CHAT_MODEL || 'ft:gpt-4o-2024-08-06:dave:glowup-chat-v3:D6qlO5WY';
+        const chatModel = CHAT_MODEL;
         console.log(`💬 Chat request: ${messages.length} msgs, model: ${chatModel}, userId: ${userId || 'guest'}`);
         // ── Generate conversation context summary + last exchange (verbatim) ──
         let conversationContext = '';
@@ -3253,6 +3503,10 @@ ${lastExchangeVerbatim ? `## Last Exchange (verbatim)\n\n${lastExchangeVerbatim}
 - Use conversation context to provide continuity — reference previous discussions, build on earlier recommendations, and maintain a coherent thread
 - You may call multiple tools in one turn
 
+## Foundational Guidance
+
+${foundational_guidance_1.FOUNDATIONAL_LOOKSMAX_GUIDANCE}
+
 ## Tone & Style
 
 - Warm, encouraging, approachable — like a knowledgeable friend who genuinely cares
@@ -3307,6 +3561,7 @@ Rules:
             console.log(`📝 Conversation context: ${conversationContext.substring(0, 100)}...`);
         }
         const collectedProducts = [];
+        const executedActions = [];
         // ── Tool-calling loop (max 5 iterations to prevent runaway) ──
         let currentMessages = [...chatMessages];
         let reply = '';
@@ -3336,6 +3591,7 @@ Rules:
                     const result = await executeChatTool(fnName, args, userId || null);
                     console.log(`  ✅ ${fnName} → ${result.substring(0, 120)}...`);
                     collectProductsFromToolResult(fnName, result, collectedProducts);
+                    executedActions.push(summarizeToolAction(fnName, args, result));
                     return {
                         role: 'tool',
                         tool_call_id: toolCall.id,
@@ -3387,6 +3643,7 @@ Rules:
             message: reply,
             products: dedupedProducts,
             product_map: productMap,
+            actions: executedActions,
             ...(title && { title })
         });
     }
@@ -3433,10 +3690,42 @@ function dedupeProducts(products) {
     }
     return Array.from(map.values());
 }
+function summarizeToolAction(toolName, args, result) {
+    let parsed = null;
+    try {
+        parsed = JSON.parse(result);
+    }
+    catch {
+        parsed = null;
+    }
+    const ok = parsed ? !parsed.error : false;
+    const action = {
+        tool: toolName,
+        ok,
+    };
+    if (parsed?.error) {
+        action.error = parsed.error;
+    }
+    if (toolName === 'add_to_cart' || toolName === 'remove_from_cart') {
+        action.product_id = parsed?.product_id || args?.product_id || null;
+    }
+    if (toolName === 'update_user_routine') {
+        action.routine_updated = ok;
+        action.routine_id = parsed?.routine_id || null;
+    }
+    if (toolName === 'add_to_cart') {
+        const integration = parsed?.routine_integration;
+        action.routine_updated = Boolean(integration?.success);
+        if (integration?.routine_id) {
+            action.routine_id = integration.routine_id;
+        }
+    }
+    return action;
+}
 // ═══════════════════════════════════════════════════════════════
 // HOME FEED — Personalized via fine-tuned model + tool calling
 // ═══════════════════════════════════════════════════════════════
-const FEED_MODEL = process.env.GLOWUP_CHAT_MODEL || 'ft:gpt-4o-2024-08-06:dave:glowup-product-embeds:D6KQn97D';
+const FEED_MODEL = (0, foundational_guidance_1.resolveGlowupModel)('GLOWUP_FEED_MODEL', 'GLOWUP_CHAT_MODEL');
 // ── In-memory cache for home feed AI results (5 min TTL) ──
 const feedCache = new Map();
 const FEED_CACHE_TTL = 5 * 60 * 1000; // 5 minutes

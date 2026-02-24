@@ -13,9 +13,9 @@ struct OnboardingView: View {
     
     // Rotating Quotes/Subtitles
     let subtitles = [
-        "Discover the goddess within you.",
-        "Science-backed routines, curated for you.",
-        "Your personal AI beauty concierge."
+        "Upload photos + a little context. We do the heavy lifting.",
+        "Photo-led glow-up analysis with techniques and product picks.",
+        "Upgrade to GlowUp+ for deeper, personalized recommendations."
     ]
     
     var body: some View {
@@ -60,7 +60,7 @@ struct OnboardingView: View {
                 
                 // Text Section (approx 2/3 down)
                 VStack(alignment: .leading, spacing: 16) {
-                    Text("Glow Up\nYour Routine.")
+                    Text("Glow Up\nFrom Your Photos.")
                         .font(.custom("Didot", size: 48)) // Greek/Pink Vibe
                         .fontWeight(.bold)
                         .foregroundColor(.white)

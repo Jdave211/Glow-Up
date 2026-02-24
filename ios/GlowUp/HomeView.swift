@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import Photos
 
 // ═══════════════════════════════════════════════════
 // MARK: - HomeViewModel (fetches from fine-tuned model)
@@ -181,13 +182,13 @@ class HomeViewModel: ObservableObject {
     
     private func replacementQuery(for product: FeedProduct) -> String {
         if let concerns = product.target_concerns, let first = concerns.first, !first.isEmpty {
-            return "\(first) skincare"
+            return "\(first) looksmax"
         }
         if !product.category.isEmpty {
-            return "\(product.category) skincare"
+            return "\(product.category) looksmax"
         }
         let namePrefix = product.name.split(separator: " ").prefix(2).joined(separator: " ")
-        return namePrefix.isEmpty ? "skincare routine" : "\(namePrefix) skincare"
+        return namePrefix.isEmpty ? "looksmax routine" : "\(namePrefix) looksmax"
     }
 }
 
@@ -393,7 +394,7 @@ struct HomeView: View {
             if !viewModel.pickedForYou.isEmpty {
                 productSection(
                     title: "Picked For You",
-                    subtitle: "Based on your profile",
+                    subtitle: "Based on your photos + profile",
                     products: viewModel.pickedForYou,
                     accent: Color(hex: "FF6B9D"),
                     onAddToCart: { product in
@@ -415,11 +416,11 @@ struct HomeView: View {
                 )
             }
             
-            // New from Ulta
+            // New picks
             if !viewModel.newArrivals.isEmpty {
                 productSection(
                     title: "New Arrivals",
-                    subtitle: "Fresh from Ulta",
+                    subtitle: "Fresh picks for your routine",
                     products: viewModel.newArrivals,
                     accent: Color(hex: "4ECDC4")
                 )
@@ -1236,7 +1237,7 @@ struct ProductDetailSheet: View {
                     HStack(spacing: 10) {
                         Image(systemName: isInCart ? "checkmark.circle.fill" : "bag.fill.badge.plus")
                             .font(.system(size: 18, weight: .bold))
-                        Text(isInCart ? "Add one more — $\(product.price.roundedUpPrice)" : "Add to Cart — $\(product.price.roundedUpPrice)")
+                        Text("Add to Cart — $\(product.price.roundedUpPrice)")
                             .font(.system(size: 17, weight: .bold))
                     }
                     .foregroundColor(.white)
@@ -1273,11 +1274,8 @@ struct ProductDetailSheet: View {
 struct QuickBuySheet: View {
     @ObservedObject var cartManager: CartManager
     @Environment(\.dismiss) private var dismiss
-    @StateObject private var paymentHandler = PaymentHandler()
     @State private var analysis: [String: APIService.CartAnalysisItem] = [:]
-    @State private var isAgentBuying = false
-    @State private var orderPlaced = false
-    @State private var showAddressAlert = false
+    @State private var showingShopLinks = false
     @State private var showingProductDetail: InferenceProduct?
     @State private var selectedFit: APIService.CartAnalysisItem?
     @State private var isLoadingAnalysis = false
@@ -1288,32 +1286,10 @@ struct QuickBuySheet: View {
         NavigationView {
             ZStack {
                 Color(hex: "FFF5F8").ignoresSafeArea()
-                
-                if orderPlaced {
-                    VStack(spacing: 16) {
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.system(size: 52))
-                            .foregroundColor(Color(hex: "4ECDC4"))
-                        Text("Order placed")
-                            .font(.system(size: 24, weight: .bold))
-                            .foregroundColor(Color(hex: "2D2D2D"))
-                        Text("Your glow-up is on the way ✨")
-                            .font(.system(size: 14))
-                            .foregroundColor(Color(hex: "999999"))
-                    }
-                } else if isAgentBuying {
-                    VStack(spacing: 16) {
-                        ProgressView()
-                            .scaleEffect(1.2)
-                            .tint(Color(hex: "FF6B9D"))
-                        Text("Purchasing…")
-                            .font(.system(size: 15, weight: .medium))
-                            .foregroundColor(Color(hex: "888888"))
-                    }
-                } else {
-                    VStack(spacing: 0) {
+
+                VStack(spacing: 0) {
                         // Subtitle
-                        Text("Our agents find the best products at the best price for you.")
+                        Text("We find you the best skincare from the best and most affordable spots.")
                             .font(.system(size: 12))
                             .foregroundColor(Color(hex: "B0B0B0"))
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1350,22 +1326,15 @@ struct QuickBuySheet: View {
                                         let pid = item.product.id
                                         QuickBuyRow(
                                             item: item,
-                                            quantity: cartManager.quantity(for: pid),
                                             analysis: analysis[pid],
                                             onOpen: {
                                                 showingProductDetail = item.product
                                                 selectedFit = analysis[pid]
                                             },
-                                            onIncrement: {
-                                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                            onRemove: {
+                                                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                                                 withAnimation(.easeInOut(duration: 0.15)) {
-                                                    cartManager.incrementLocal(productId: pid)
-                                                }
-                                            },
-                                            onDecrement: {
-                                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                                                withAnimation(.easeInOut(duration: 0.15)) {
-                                                    cartManager.decrementLocal(productId: pid)
+                                                    cartManager.removeFromCart(productId: pid)
                                                 }
                                             }
                                         )
@@ -1380,34 +1349,37 @@ struct QuickBuySheet: View {
                                 Divider()
                                 
                                 HStack {
-                                    Text("Total")
+                                    Text("Estimated subtotal")
                                         .font(.system(size: 15, weight: .medium))
                                         .foregroundColor(Color(hex: "888888"))
                                     Spacer()
-                                    Text("$\(String(format: "%.2f", cartManager.checkoutTotal))")
+                                    Text("$\(String(format: "%.2f", cartManager.totalPrice))")
                                         .font(.system(size: 18, weight: .bold))
                                         .foregroundColor(Color(hex: "2D2D2D"))
                                 }
                                 .padding(.horizontal, 20)
                                 
-                                HStack {
-                                    Text("Includes GlowUp markup")
-                                        .font(.system(size: 11))
-                                        .foregroundColor(Color(hex: "AAAAAA"))
-                                    Spacer()
-                                    Text("+$\(String(format: "%.2f", cartManager.markupTotal))")
-                                        .font(.system(size: 11, weight: .semibold))
-                                        .foregroundColor(Color(hex: "AAAAAA"))
-                                }
-                                .padding(.horizontal, 20)
-                                
-                                VStack(spacing: 6) {
-                                    ApplePayButton()
-                                        .frame(height: 48)
-                                        .onTapGesture { startApplePay() }
-                                    Text("Pay securely with Apple Pay")
-                                        .font(.system(size: 10, weight: .medium))
-                                        .foregroundColor(Color(hex: "AAAAAA"))
+                                Button(action: {
+                                    cartManager.flushPendingChanges()
+                                    showingShopLinks = true
+                                }) {
+                                    HStack(spacing: 8) {
+                                        Text("Open purchase links")
+                                            .font(.system(size: 15, weight: .semibold))
+                                        Image(systemName: "arrow.up.right.square")
+                                            .font(.system(size: 13, weight: .semibold))
+                                    }
+                                    .foregroundColor(.white)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 14)
+                                    .background(
+                                        LinearGradient(
+                                            colors: [Color(hex: "FF6B9D"), Color(hex: "E8507F")],
+                                            startPoint: .leading,
+                                            endPoint: .trailing
+                                        )
+                                    )
+                                    .cornerRadius(12)
                                 }
                                 .padding(.horizontal, 20)
                                 .padding(.bottom, 8)
@@ -1428,17 +1400,13 @@ struct QuickBuySheet: View {
                     .foregroundColor(Color(hex: "FF6B9D"))
                 }
             }
-        }
         .onAppear { loadAnalysis() }
         .onDisappear { cartManager.flushPendingChanges() }
-        .alert("Add a shipping address", isPresented: $showAddressAlert) {
-            Button("Go to Settings") { dismiss() }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Your address isn't set yet. Please add it in Settings → Shipping.")
-        }
         .sheet(item: $showingProductDetail) { product in
             ProductDetailSheet(product: product, cartManager: cartManager, fit: selectedFit, showFullFit: true)
+        }
+        .sheet(isPresented: $showingShopLinks) {
+            ShopLinksSheet(items: cartManager.items, subtotal: cartManager.totalPrice)
         }
     }
     
@@ -1463,39 +1431,7 @@ struct QuickBuySheet: View {
         }
     }
     
-    private func startApplePay() {
-        // Flush local qty changes before paying
-        cartManager.flushPendingChanges()
-        
-        guard SessionManager.shared.hasShippingAddress else {
-            showAddressAlert = true
-            return
-        }
-        let purchasedItems = cartManager.items
-        paymentHandler.startPayment(items: purchasedItems, total: cartManager.checkoutTotal) { success in
-            if success {
-                withAnimation { isAgentBuying = true }
-                Task {
-                    let uid = userId ?? "guest"
-                    let _ = try? await APIService.shared.createOrder(userId: uid, items: purchasedItems)
-                    
-                    // Integrate each purchased product into the user's routine
-                    for item in purchasedItems {
-                        try? await APIService.shared.integrateProductIntoRoutine(userId: uid, productId: item.product.id)
-                    }
-                    
-                    try? await Task.sleep(nanoseconds: 2 * 1_000_000_000)
-                    await MainActor.run {
-                        withAnimation {
-                            isAgentBuying = false
-                            orderPlaced = true
-                        }
-                        cartManager.clearCart()
-                    }
-                }
-            }
-        }
-    }
+    // In-app checkout is paused while users buy directly from external product links.
 }
 
 // ─────────────────────────────────────────────────
@@ -1504,11 +1440,9 @@ struct QuickBuySheet: View {
 
 struct QuickBuyRow: View {
     let item: CartItem
-    let quantity: Int
     let analysis: APIService.CartAnalysisItem?
     let onOpen: () -> Void
-    let onIncrement: () -> Void
-    let onDecrement: () -> Void
+    let onRemove: () -> Void
     
     private var badgeColor: Color {
         switch analysis?.label {
@@ -1565,42 +1499,22 @@ struct QuickBuyRow: View {
             
             Spacer(minLength: 4)
             
-            // Price + stepper
+            // Price + remove action
             VStack(spacing: 6) {
-                Text("$\(item.product.price.roundedUpPriceWithMarkup)")
+                Text("$\(item.product.price.roundedUpPrice)")
                     .font(.system(size: 13, weight: .bold))
                     .foregroundColor(Color(hex: "2D2D2D"))
-                
-                // Compact stepper
-                HStack(spacing: 0) {
-                    Button(action: onDecrement) {
-                        Image(systemName: "minus")
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundColor(Color(hex: "666666"))
-                            .frame(width: 26, height: 26)
-                            .background(Color(hex: "F0F0F0"))
-                            .cornerRadius(6, corners: [.topLeft, .bottomLeft])
-                    }
-                    
-                    Text("\(quantity)")
-                        .font(.system(size: 13, weight: .bold, design: .rounded))
-                        .foregroundColor(Color(hex: "2D2D2D"))
-                        .frame(width: 26, height: 26)
-                        .background(Color.white)
-                    
-                    Button(action: onIncrement) {
-                        Image(systemName: "plus")
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundColor(.white)
-                            .frame(width: 26, height: 26)
-                            .background(Color(hex: "FF6B9D"))
-                            .cornerRadius(6, corners: [.topRight, .bottomRight])
-                    }
+
+                Button(action: onRemove) {
+                    Text("Remove")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(Color(hex: "FF6B9D"))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color(hex: "FFF0F5"))
+                        .cornerRadius(8)
                 }
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                        .stroke(Color(hex: "E8E8E8"), lineWidth: 0.5)
-                )
+                .buttonStyle(.plain)
             }
         }
         .padding(12)
@@ -1634,6 +1548,7 @@ struct RoutineDetailSheet: View {
     @State private var saveError: String?
     @State private var shareItems: [Any] = []
     @State private var showShareSheet = false
+    @State private var sharePreview: RoutineSharePreviewData?
     @State private var isPreparingShare = false
     @State private var shareError: String?
     @State private var editableSteps: [EditableRoutineStep] = []
@@ -1711,9 +1626,6 @@ struct RoutineDetailSheet: View {
             if let brand = step.productBrand, !brand.isEmpty {
                 out += " (\(brand))"
             }
-            if let productId = step.productId, !productId.isEmpty {
-                out += "\n   Product ID: \(productId)"
-            }
             if !step.instructions.isEmpty {
                 out += "\n   \(step.instructions)"
             }
@@ -1724,117 +1636,132 @@ struct RoutineDetailSheet: View {
     
     var body: some View {
         NavigationView {
-            ScrollView {
-                VStack(spacing: 24) {
-                    VStack(spacing: 12) {
-                        Image(systemName: icon)
-                            .font(.system(size: 50))
-                            .foregroundColor(accentColor)
-                        
-                        Text(title)
-                            .font(.system(size: 28, weight: .bold, design: .serif))
-                            .foregroundColor(Color(hex: "2D2D2D"))
-                        
-                        if routineType != .weekly && currentStreak > 0 {
-                            HStack(spacing: 6) {
-                                Image(systemName: "flame.fill")
-                                    .font(.system(size: 14))
-                                    .foregroundColor(Color(hex: "FF6B00"))
-                                Text("\(currentStreak) day streak")
-                                    .font(.system(size: 14, weight: .semibold))
-                                    .foregroundColor(Color(hex: "FF6B00"))
-                            }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background(Color(hex: "FFF4E6"))
-                            .cornerRadius(12)
-                        }
-                    }
-                    .padding(.top, 20)
-
-                    if isEditing {
-                        Text("Edit mode: choose specific products, adjust steps, then save.")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundColor(Color(hex: "777777"))
-                            .padding(.horizontal, 20)
-                    }
-                    
-                    VStack(spacing: 16) {
-                        ForEach(orderedEditableSteps) { editableStep in
-                            let step = editableStep.asFeedStep
-                            RoutineStepRow(
-                                step: step,
-                                isCompleted: completedSteps.contains("\(routineTypeStr):\(step.id)"),
-                                accentColor: accentColor,
-                                onToggle: { toggleStep(step) },
-                                onEdit: isEditing ? { beginEditing(step: editableStep) } : nil,
-                                onDelete: isEditing ? { deleteStep(step: editableStep) } : nil
-                            )
-                        }
-                    }
-                    .padding(.horizontal, 20)
-
-                    if isEditing {
+            ZStack {
+                ScrollView {
+                    VStack(spacing: 24) {
                         VStack(spacing: 12) {
-                            Button(action: addStep) {
-                                HStack(spacing: 8) {
-                                    Image(systemName: "plus.circle.fill")
-                                    Text("Add Step")
-                                        .font(.system(size: 15, weight: .semibold))
-                                }
+                            Image(systemName: icon)
+                                .font(.system(size: 50))
                                 .foregroundColor(accentColor)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 12)
-                                .background(accentColor.opacity(0.12))
-                                .cornerRadius(12)
-                            }
-                            .buttonStyle(PlainButtonStyle())
-
-                            Button(action: saveRoutineEdits) {
-                                HStack(spacing: 8) {
-                                    if isSavingRoutine {
-                                        ProgressView().tint(.white)
-                                    } else {
-                                        Image(systemName: "checkmark.circle.fill")
-                                    }
-                                    Text(isSavingRoutine ? "Saving..." : "Save Routine")
-                                        .font(.system(size: 15, weight: .semibold))
+                            
+                            Text(title)
+                                .font(.system(size: 28, weight: .bold, design: .serif))
+                                .foregroundColor(Color(hex: "2D2D2D"))
+                            
+                            if routineType != .weekly && currentStreak > 0 {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "flame.fill")
+                                        .font(.system(size: 14))
+                                        .foregroundColor(Color(hex: "FF6B00"))
+                                    Text("\(currentStreak) day streak")
+                                        .font(.system(size: 14, weight: .semibold))
+                                        .foregroundColor(Color(hex: "FF6B00"))
                                 }
-                                .foregroundColor(.white)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 12)
-                                .background(accentColor)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .background(Color(hex: "FFF4E6"))
                                 .cornerRadius(12)
                             }
-                            .buttonStyle(PlainButtonStyle())
-                            .disabled(isSavingRoutine || orderedEditableSteps.isEmpty)
+                        }
+                        .padding(.top, 20)
 
-                            if let saveError {
-                                Text(saveError)
-                                    .font(.system(size: 12))
-                                    .foregroundColor(Color(hex: "D64545"))
-                                    .multilineTextAlignment(.center)
+                        if isEditing {
+                            Text("Edit mode: choose specific products, adjust steps, then save.")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundColor(Color(hex: "777777"))
+                                .padding(.horizontal, 20)
+                        }
+                        
+                        VStack(spacing: 16) {
+                            ForEach(orderedEditableSteps) { editableStep in
+                                let step = editableStep.asFeedStep
+                                RoutineStepRow(
+                                    step: step,
+                                    isCompleted: completedSteps.contains("\(routineTypeStr):\(step.id)"),
+                                    accentColor: accentColor,
+                                    onToggle: { toggleStep(step) },
+                                    onEdit: isEditing ? { beginEditing(step: editableStep) } : nil,
+                                    onDelete: isEditing ? { deleteStep(step: editableStep) } : nil
+                                )
                             }
                         }
                         .padding(.horizontal, 20)
-                    }
-                    
-                    if isComplete {
-                        VStack(spacing: 8) {
-                            Image(systemName: "checkmark.circle.fill")
-                                .font(.system(size: 40))
-                                .foregroundColor(accentColor)
-                            Text("Routine Complete! ✨")
-                                .font(.system(size: 18, weight: .bold))
-                                .foregroundColor(Color(hex: "2D2D2D"))
-                            Text("Keep up the great work!")
-                                .font(.system(size: 14))
-                                .foregroundColor(Color(hex: "888888"))
+
+                        if isEditing {
+                            VStack(spacing: 12) {
+                                Button(action: addStep) {
+                                    HStack(spacing: 8) {
+                                        Image(systemName: "plus.circle.fill")
+                                        Text("Add Step")
+                                            .font(.system(size: 15, weight: .semibold))
+                                    }
+                                    .foregroundColor(accentColor)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 12)
+                                    .background(accentColor.opacity(0.12))
+                                    .cornerRadius(12)
+                                }
+                                .buttonStyle(PlainButtonStyle())
+
+                                Button(action: saveRoutineEdits) {
+                                    HStack(spacing: 8) {
+                                        if isSavingRoutine {
+                                            ProgressView().tint(.white)
+                                        } else {
+                                            Image(systemName: "checkmark.circle.fill")
+                                        }
+                                        Text(isSavingRoutine ? "Saving..." : "Save Routine")
+                                            .font(.system(size: 15, weight: .semibold))
+                                    }
+                                    .foregroundColor(.white)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 12)
+                                    .background(accentColor)
+                                    .cornerRadius(12)
+                                }
+                                .buttonStyle(PlainButtonStyle())
+                                .disabled(isSavingRoutine || orderedEditableSteps.isEmpty)
+
+                                if let saveError {
+                                    Text(saveError)
+                                        .font(.system(size: 12))
+                                        .foregroundColor(Color(hex: "D64545"))
+                                        .multilineTextAlignment(.center)
+                                }
+                            }
+                            .padding(.horizontal, 20)
                         }
-                        .padding(.vertical, 20)
+                        
+                        if isComplete {
+                            VStack(spacing: 8) {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .font(.system(size: 40))
+                                    .foregroundColor(accentColor)
+                                Text("Routine Complete! ✨")
+                                    .font(.system(size: 18, weight: .bold))
+                                    .foregroundColor(Color(hex: "2D2D2D"))
+                                Text("Keep up the great work!")
+                                    .font(.system(size: 14))
+                                    .foregroundColor(Color(hex: "888888"))
+                            }
+                            .padding(.vertical, 20)
+                        }
+                        
+                        Spacer(minLength: 40)
                     }
-                    
-                    Spacer(minLength: 40)
+                }
+
+                if let sharePreview {
+                    RoutineSharePreviewModal(
+                        preview: sharePreview,
+                        onClose: { self.sharePreview = nil },
+                        onShare: {
+                            shareItems = sharePreview.shareItems
+                            self.sharePreview = nil
+                            showShareSheet = true
+                        }
+                    )
+                    .zIndex(2)
                 }
             }
             .background(PinkDrapeBackground().ignoresSafeArea())
@@ -2052,14 +1979,45 @@ struct RoutineDetailSheet: View {
         Task {
             do {
                 let response = try await APIService.shared.createRoutineShareLink(userId: userId, routineType: routineTypeStr)
-                let url = URL(string: response.share_url)
-                let fallback = "\(title)\n\n\(shareText)"
+                let shareURL = URL(string: response.share_url)
+                let routineKey = response.routine_key?.trimmingCharacters(in: .whitespacesAndNewlines)
+                let keyLine: String = {
+                    if let key = routineKey, !key.isEmpty {
+                        return "\n\nRoutine Key: \(key)"
+                    }
+                    return ""
+                }()
+                let fallback = "\(title)\n\n\(shareText)\(keyLine)"
+                let entries = orderedEditableSteps.map { step in
+                    RoutineShareCardEntry(
+                        stepNumber: step.step,
+                        stepName: step.name,
+                        productName: step.productName,
+                        productBrand: step.productBrand
+                    )
+                }
                 await MainActor.run {
-                    var items: [Any] = [fallback]
-                    if let url { items.insert(url, at: 0) }
-                    shareItems = items
+                    let subtitle = routineKey.map { "Key \($0) • Share to TikTok and Instagram." } ?? "Share to TikTok, Instagram, or messages."
+                    let cardImage = renderRoutineShareCardImage(
+                        title: title,
+                        subtitle: subtitle,
+                        entries: Array(entries.prefix(7)),
+                        routineKey: routineKey
+                    )
+                    let items = makeRoutineShareItems(
+                        cardImage: cardImage,
+                        shareURL: shareURL,
+                        fallbackText: fallback
+                    )
+                    sharePreview = RoutineSharePreviewData(
+                        title: title,
+                        subtitle: subtitle,
+                        routineKey: routineKey,
+                        entries: entries,
+                        cardImage: cardImage,
+                        shareItems: items
+                    )
                     isPreparingShare = false
-                    showShareSheet = true
                 }
             } catch {
                 await MainActor.run {
@@ -2474,13 +2432,6 @@ struct RoutineStepRow: View {
                                 }
                             }
 
-                            if let productId = step.product_id, !productId.isEmpty {
-                                Text("ID \(productId)")
-                                    .font(.system(size: 10, weight: .medium, design: .monospaced))
-                                    .foregroundColor(Color(hex: "A0A0A0"))
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
-                            }
                         }
                     }
                     .padding(10)
@@ -2520,6 +2471,308 @@ struct ActivityShareSheet: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
+}
+
+struct RoutineSharePreviewData: Identifiable {
+    let id = UUID()
+    let title: String
+    let subtitle: String
+    let routineKey: String?
+    let entries: [RoutineShareCardEntry]
+    let cardImage: UIImage?
+    let shareItems: [Any]
+}
+
+struct RoutineShareCardEntry {
+    let stepNumber: Int
+    let stepName: String
+    let productName: String?
+    let productBrand: String?
+}
+
+struct RoutineSharePreviewModal: View {
+    let preview: RoutineSharePreviewData
+    let onClose: () -> Void
+    let onShare: () -> Void
+
+    @State private var statusMessage: String?
+
+    var body: some View {
+        ZStack {
+            Rectangle()
+                .fill(.ultraThinMaterial)
+                .ignoresSafeArea()
+
+            Color.black.opacity(0.22)
+                .ignoresSafeArea()
+
+            VStack(spacing: 14) {
+                HStack {
+                    Text("Share Routine")
+                        .font(.system(size: 17, weight: .bold))
+                        .foregroundColor(Color(hex: "2D2D2D"))
+                    Spacer()
+                    Button(action: onClose) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundColor(Color(hex: "666666"))
+                            .frame(width: 30, height: 30)
+                            .background(Color.white)
+                            .clipShape(Circle())
+                    }
+                }
+
+                if let image = preview.cardImage {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxHeight: 360)
+                        .cornerRadius(20)
+                        .shadow(color: Color.black.opacity(0.16), radius: 20, x: 0, y: 10)
+                } else {
+                    RoutineSocialShareCard(
+                        title: preview.title,
+                        subtitle: preview.subtitle,
+                        entries: Array(preview.entries.prefix(7)),
+                        routineKey: preview.routineKey
+                    )
+                    .frame(height: 360)
+                    .cornerRadius(20)
+                }
+
+                if let key = preview.routineKey, !key.isEmpty {
+                    Button(action: {
+                        UIPasteboard.general.string = key
+                        statusMessage = "Routine key copied."
+                    }) {
+                        HStack(spacing: 8) {
+                            Text("Routine Key \(key)")
+                                .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                                .foregroundColor(Color(hex: "2D2D2D"))
+                            Spacer()
+                            Image(systemName: "doc.on.doc")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundColor(Color(hex: "FF6B9D"))
+                            Text("Copy")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundColor(Color(hex: "FF6B9D"))
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .background(Color(hex: "FFF2F7"))
+                        .cornerRadius(12)
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                HStack(spacing: 10) {
+                    Button(action: saveCardScreenshot) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "camera.fill")
+                            Text("Save Screenshot")
+                                .font(.system(size: 13, weight: .semibold))
+                        }
+                        .foregroundColor(Color(hex: "FF6B9D"))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 11)
+                        .background(Color.white)
+                        .cornerRadius(10)
+                    }
+
+                    Button(action: onShare) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "square.and.arrow.up")
+                            Text("Share")
+                                .font(.system(size: 13, weight: .semibold))
+                        }
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 11)
+                        .background(Color(hex: "FF6B9D"))
+                        .cornerRadius(10)
+                    }
+                }
+
+                if let statusMessage {
+                    Text(statusMessage)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(Color(hex: "666666"))
+                }
+            }
+            .padding(16)
+            .background(Color(hex: "FFF9FC"))
+            .cornerRadius(22)
+            .shadow(color: Color.black.opacity(0.24), radius: 22, x: 0, y: 14)
+            .padding(.horizontal, 20)
+        }
+        .transition(.opacity)
+    }
+
+    private func saveCardScreenshot() {
+        guard let image = preview.cardImage else {
+            statusMessage = "Card image unavailable."
+            return
+        }
+        PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
+            DispatchQueue.main.async {
+                guard status == .authorized || status == .limited else {
+                    statusMessage = "Enable Photos access to save screenshots."
+                    return
+                }
+                UIImageWriteToSavedPhotosAlbum(image, nil, nil, nil)
+                statusMessage = "Screenshot saved to Photos."
+            }
+        }
+    }
+}
+
+@MainActor
+func makeRoutineShareItems(
+    title: String,
+    subtitle: String,
+    entries: [RoutineShareCardEntry],
+    shareURL: URL?,
+    fallbackText: String,
+    routineKey: String? = nil
+) -> [Any] {
+    let cardImage = renderRoutineShareCardImage(
+        title: title,
+        subtitle: subtitle,
+        entries: Array(entries.prefix(7)),
+        routineKey: routineKey
+    )
+    return makeRoutineShareItems(cardImage: cardImage, shareURL: shareURL, fallbackText: fallbackText)
+}
+
+@MainActor
+func makeRoutineShareItems(cardImage: UIImage?, shareURL: URL?, fallbackText: String) -> [Any] {
+    var items: [Any] = []
+    if let cardImage { items.append(cardImage) }
+    if let shareURL { items.append(shareURL) }
+    items.append(fallbackText)
+    return items
+}
+
+@MainActor
+func renderRoutineShareCardImage(
+    title: String,
+    subtitle: String,
+    entries: [RoutineShareCardEntry],
+    routineKey: String? = nil
+) -> UIImage? {
+    guard #available(iOS 16.0, *) else { return nil }
+    let card = RoutineSocialShareCard(
+        title: title,
+        subtitle: subtitle,
+        entries: entries,
+        routineKey: routineKey
+    )
+    .frame(width: 1080, height: 1920)
+    .background(Color(hex: "FFF4F8"))
+    let renderer = ImageRenderer(content: card)
+    renderer.scale = 1.0
+    return renderer.uiImage
+}
+
+struct RoutineSocialShareCard: View {
+    let title: String
+    let subtitle: String
+    let entries: [RoutineShareCardEntry]
+    let routineKey: String?
+
+    var body: some View {
+        ZStack {
+            LinearGradient(
+                colors: [Color(hex: "FFF6FA"), Color(hex: "FFE7F0"), Color(hex: "FFE0EC")],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
+
+            Circle()
+                .fill(Color(hex: "FF6B9D").opacity(0.12))
+                .frame(width: 680, height: 680)
+                .blur(radius: 20)
+                .offset(x: 260, y: -540)
+
+            VStack(alignment: .leading, spacing: 34) {
+                VStack(alignment: .leading, spacing: 18) {
+                    Text("GlowUp Routine")
+                        .font(.system(size: 44, weight: .heavy, design: .rounded))
+                        .foregroundColor(Color(hex: "FF6B9D"))
+
+                    if let routineKey, !routineKey.isEmpty {
+                        Text("Routine Key: \(routineKey)")
+                            .font(.system(size: 30, weight: .bold, design: .monospaced))
+                            .foregroundColor(Color(hex: "4A4A4A"))
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 10)
+                            .background(Color.white.opacity(0.9))
+                            .cornerRadius(16)
+                    }
+
+                    Text(title)
+                        .font(.custom("Didot", size: 88))
+                        .foregroundColor(Color(hex: "2D2D2D"))
+                        .lineLimit(2)
+                    Text(subtitle)
+                        .font(.system(size: 34, weight: .medium))
+                        .foregroundColor(Color(hex: "666666"))
+                        .lineLimit(3)
+                }
+
+                VStack(alignment: .leading, spacing: 18) {
+                    ForEach(Array(entries.prefix(7).enumerated()), id: \.offset) { _, entry in
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("STEP \(entry.stepNumber) • \(entry.stepName.uppercased())")
+                                .font(.system(size: 22, weight: .bold, design: .rounded))
+                                .foregroundColor(Color(hex: "8C8C8C"))
+                                .lineLimit(1)
+
+                            if let productName = entry.productName, !productName.isEmpty {
+                                Text(productName)
+                                    .font(.system(size: 40, weight: .heavy, design: .rounded))
+                                    .foregroundColor(Color(hex: "2F2F2F"))
+                                    .lineLimit(2)
+
+                                if let brand = entry.productBrand, !brand.isEmpty {
+                                    Text(brand.uppercased())
+                                        .font(.system(size: 21, weight: .semibold, design: .rounded))
+                                        .foregroundColor(Color(hex: "FF6B9D"))
+                                        .lineLimit(1)
+                                }
+                            } else {
+                                Text("No product linked yet")
+                                    .font(.system(size: 30, weight: .semibold, design: .rounded))
+                                    .foregroundColor(Color(hex: "A0A0A0"))
+                                    .lineLimit(1)
+                            }
+                        }
+                        .padding(.horizontal, 28)
+                        .padding(.vertical, 22)
+                        .background(Color.white.opacity(0.84))
+                        .cornerRadius(22)
+                    }
+                }
+
+                Spacer()
+
+                HStack(spacing: 14) {
+                    Image(systemName: "arrow.down.circle.fill")
+                        .font(.system(size: 40, weight: .bold))
+                        .foregroundColor(Color(hex: "FF6B9D"))
+                    Text("Tap link to open in GlowUp and add to your routine library.")
+                        .font(.system(size: 30, weight: .semibold))
+                        .foregroundColor(Color(hex: "4A4A4A"))
+                }
+                .padding(24)
+                .background(Color.white.opacity(0.88))
+                .cornerRadius(22)
+            }
+            .padding(.horizontal, 76)
+            .padding(.vertical, 88)
+        }
+    }
 }
 
 #Preview {

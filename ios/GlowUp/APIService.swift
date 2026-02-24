@@ -35,10 +35,19 @@ class APIService {
     // MARK: - Chat
     
     struct ChatResponse {
+        struct ChatAction {
+            let tool: String
+            let ok: Bool
+            let productId: String?
+            let routineUpdated: Bool
+            let routineId: String?
+        }
+
         let message: String
         let title: String?
         let products: [FeedProduct]
         let productMap: [String: FeedProduct]
+        let actions: [ChatAction]
     }
     
     func chat(messages: [[String: String]], userId: String?, conversationId: String? = nil) async throws -> ChatResponse {
@@ -85,8 +94,30 @@ class APIService {
         if productMap.isEmpty {
             for p in decodedProducts { productMap[p.id] = p }
         }
+
+        let actionRows = json["actions"] as? [[String: Any]] ?? []
+        let actions = actionRows.compactMap { row -> ChatResponse.ChatAction? in
+            guard let tool = row["tool"] as? String else { return nil }
+            let ok = (row["ok"] as? Bool) ?? false
+            let productId = row["product_id"] as? String
+            let routineUpdated = (row["routine_updated"] as? Bool) ?? false
+            let routineId = row["routine_id"] as? String
+            return ChatResponse.ChatAction(
+                tool: tool,
+                ok: ok,
+                productId: productId,
+                routineUpdated: routineUpdated,
+                routineId: routineId
+            )
+        }
         
-        return ChatResponse(message: message, title: title, products: decodedProducts, productMap: productMap)
+        return ChatResponse(
+            message: message,
+            title: title,
+            products: decodedProducts,
+            productMap: productMap,
+            actions: actions
+        )
     }
 
     func guestChat(messages: [[String: String]]) async throws -> String {
@@ -387,7 +418,17 @@ class APIService {
         let success: Bool
         let share_url: String
         let app_deep_link: String?
+        let routine_key: String?
         let routine_type: String?
+    }
+
+    struct SharedRoutineFetchResponse: Codable {
+        let success: Bool
+        let routine_key: String?
+        let routine_type: String?
+        let routine: FeedRoutine
+        let issued_at: String?
+        let source_user_id: String?
     }
 
     func searchRoutineProducts(
@@ -478,6 +519,54 @@ class APIService {
         }
 
         return try JSONDecoder().decode(RoutineShareResponse.self, from: data)
+    }
+
+    func fetchSharedRoutine(token: String) async throws -> SharedRoutineFetchResponse {
+        guard !token.isEmpty else { throw APIError.invalidURL }
+        let encoded = token.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? token
+        guard let url = URL(string: "\(baseURL)/api/routine/share/\(encoded)") else {
+            throw APIError.invalidURL
+        }
+
+        let (data, response) = try await URLSession.shared.data(for: URLRequest(url: url))
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw APIError.serverError
+        }
+        guard httpResponse.statusCode == 200 else {
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let message = json["error"] as? String,
+               !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                throw APIError.serverMessage(message)
+            }
+            throw APIError.serverError
+        }
+        return try JSONDecoder().decode(SharedRoutineFetchResponse.self, from: data)
+    }
+
+    func fetchRoutineByKey(_ routineKey: String) async throws -> SharedRoutineFetchResponse {
+        let normalized = routineKey
+            .uppercased()
+            .filter { $0.isASCII && ($0.isLetter || $0.isNumber) }
+        guard normalized.count >= 6 else { throw APIError.serverMessage("Enter a valid routine key.") }
+
+        guard let encoded = normalized.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+              let url = URL(string: "\(baseURL)/api/routine/by-key/\(encoded)") else {
+            throw APIError.invalidURL
+        }
+
+        let (data, response) = try await URLSession.shared.data(for: URLRequest(url: url))
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw APIError.serverError
+        }
+        guard httpResponse.statusCode == 200 else {
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let message = json["error"] as? String,
+               !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                throw APIError.serverMessage(message)
+            }
+            throw APIError.serverError
+        }
+        return try JSONDecoder().decode(SharedRoutineFetchResponse.self, from: data)
     }
     
     // MARK: - Routine Check-ins

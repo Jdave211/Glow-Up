@@ -8,21 +8,19 @@ struct IntakeView: View {
     
     @State private var currentStep = 0
     @State private var scrollID = UUID()
-    // Total steps: 0 (Photo), 1 (Skin 1), 2 (Skin 2), 3 (Hair - optional), 4 (Lifestyle/Reminders)
-    private let totalSteps = 5
+    // Total steps: 0 (Photos), 1 (Skin basics), 2 (Looks goals), 3 (Lifestyle/reminders)
+    private let totalSteps = 4
     private let stepTitles = [
-        "Add your photos",
+        "Add your photos first",
         "Skin basics",
-        "Skin goals",
-        "Hair",
+        "Looks goals",
         "Lifestyle & reminders"
     ]
     private let stepSubtitles = [
-        "Optional, but improves accuracy dramatically.",
-        "Tell us about your skin type and tone.",
-        "What do you want to improve most?",
-        "Optional — helps us refine your full routine.",
-        "Set preferences that shape your routine."
+        "Primary signal for your personalized glow-up plan.",
+        "Quick context so the model reads your photos more accurately.",
+        "Tell us what to prioritize first. Skin leads, teeth/hair support.",
+        "Set reminders and final preferences."
     ]
     
     var body: some View {
@@ -106,13 +104,6 @@ struct IntakeView: View {
                             case 2:
                                 SkinGoalsStep(profile: $profile)
                             case 3:
-                                HairStep(profile: $profile, onSkip: {
-                                    withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
-                                        currentStep += 1
-                                        scrollID = UUID()
-                                    }
-                                })
-                            case 4:
                                 RemindersStep(profile: $profile)
                             default:
                                 EmptyView()
@@ -145,7 +136,7 @@ struct IntakeView: View {
                             }
                         }) {
                             HStack(spacing: 8) {
-                                Text(currentStep == totalSteps - 1 ? "Finish & Generate Routine" : "Continue")
+                                Text(currentStep == totalSteps - 1 ? "Finish & Build My Glow-Up Plan" : "Continue")
                                     .font(.system(size: 17, weight: .semibold))
                                 if currentStep == totalSteps - 1 {
                                     Image(systemName: "sparkles")
@@ -206,7 +197,7 @@ struct PhotoUploadStep: View {
                     .fontWeight(.bold)
                     .foregroundColor(Color(hex: "2D2D2D"))
                 
-                Text("Recommended for **85% more accurate** results")
+                Text("Photos are the strongest signal for your glow-up analysis.")
                     .font(.system(size: 14))
                     .foregroundColor(Color(hex: "666666"))
                     .multilineTextAlignment(.center)
@@ -248,8 +239,8 @@ struct PhotoUploadStep: View {
                 }
                 
                 PhotoSlotButton(
-                    label: "Hair/Scalp",
-                    icon: "sparkles",
+                    label: "Smile / Teeth",
+                    icon: "mouth",
                     image: scalpImage,
                     isLoading: isLoading && selectedSlot == 3
                 ) {
@@ -264,14 +255,14 @@ struct PhotoUploadStep: View {
                 Spacer()
                 MiniTip(icon: "face.dashed", text: "No makeup")
                 Spacer()
-                MiniTip(icon: "camera.fill", text: "Eye level")
+                MiniTip(icon: "camera.fill", text: "Eye level + smile shot")
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
             .background(Color(hex: "F8F8F8"))
             .cornerRadius(12)
             
-            Text("Tap any tile to add from your library or camera.")
+            Text("Tap any tile to upload. 3+ photos gives better recommendations.")
                 .font(.system(size: 12))
                 .foregroundColor(Color(hex: "888888"))
                 .multilineTextAlignment(.center)
@@ -282,7 +273,7 @@ struct PhotoUploadStep: View {
                     syncProfilePhotos()
                     onContinue()
                 }) {
-                    Text(photoCount == 4 ? "Continue with 4 photos →" : "Next →")
+                    Text(photoCount >= 3 ? "Continue to quick profile →" : "Next →")
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundColor(Color(hex: "FF6B9D"))
                 }
@@ -294,7 +285,7 @@ struct PhotoUploadStep: View {
                 Image(systemName: "lock.shield.fill")
                     .font(.system(size: 13))
                     .foregroundColor(Color(hex: "4ADE80"))
-                Text("Private visual history is on by default. You can opt out anytime.")
+                Text("Your photos are used to personalize recommendations. You can opt out anytime.")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundColor(Color(hex: "666666"))
             }
@@ -939,13 +930,13 @@ struct SkinToneSlider: View {
     }
 }
 
-// MARK: - Step 3: Skin Goals (Deep Dive + Goals)
+// MARK: - Step 3: Looks Goals (Skin-first + secondary focus areas)
 struct SkinGoalsStep: View {
     @Binding var profile: UserProfile
     @State private var customConcern = ""
     private let customConcernMaxChars = 32
     
-    let concerns = ["Acne", "Aging", "Dark Spots", "Texture", "Redness", "Dryness"]
+    let concerns = ["Acne", "Aging", "Dark Spots", "Texture", "Redness", "Dryness", "Under-Eye Bags", "Teeth Staining", "Hair Thinning", "Facial Bloating"]
     
     let skinGoals: [(id: String, emoji: String, title: String, desc: String)] = [
         ("glass_skin", "✨", "Glass Skin", "Dewy, translucent glow"),
@@ -959,8 +950,8 @@ struct SkinGoalsStep: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 28) {
             QuestionHeader(
-                title: "Skin Goals",
-                subtitle: "What does your ideal skin look like?"
+                title: "Looks Goals",
+                subtitle: "Skin-first, then smile and hairline touch-ups."
             )
             
             // Skin Goals Grid
@@ -995,7 +986,7 @@ struct SkinGoalsStep: View {
             
             // Concerns
             VStack(alignment: .leading, spacing: 14) {
-                Text("Any specific concerns?")
+                Text("Any specific areas to improve?")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundColor(Color(hex: "2D2D2D"))
                 
@@ -1092,74 +1083,7 @@ struct SkinGoalCard: View {
     }
 }
 
-// MARK: - Step 4: Hair (Optional, single page)
-struct HairStep: View {
-    @Binding var profile: UserProfile
-    let onSkip: () -> Void
-    
-    let hairTypes = ["Straight", "Wavy", "Curly", "Coily"]
-    
-    let washOptions: [(id: String, label: String)] = [
-        ("daily", "Daily"),
-        ("2_3_weekly", "2-3x/week"),
-        ("weekly", "Weekly"),
-        ("biweekly", "Biweekly"),
-        ("monthly", "Monthly or less")
-    ]
-    
-    var body: some View {
-        VStack(alignment: .leading, spacing: 24) {
-            // Hair Texture
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Hair texture")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundColor(Color(hex: "2D2D2D"))
-                
-                FlowLayout(spacing: 10) {
-                    ForEach(hairTypes, id: \.self) { type in
-                        SoftChip(
-                            text: type,
-                            isSelected: profile.hairType == type.lowercased(),
-                            action: { profile.hairType = type.lowercased() }
-                        )
-                    }
-                }
-            }
-            
-            // Wash Frequency — compact chip style
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Wash frequency")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundColor(Color(hex: "2D2D2D"))
-                
-                FlowLayout(spacing: 10) {
-                    ForEach(washOptions, id: \.id) { option in
-                        SoftChip(
-                            text: option.label,
-                            isSelected: profile.washFrequency == option.id,
-                            action: { profile.washFrequency = option.id }
-                        )
-                    }
-                }
-            }
-            
-            // Skip nudge
-            Button(action: onSkip) {
-                HStack(spacing: 6) {
-                    Text("Skip hair for now")
-                        .font(.system(size: 14, weight: .medium))
-                    Image(systemName: "arrow.right")
-                        .font(.system(size: 12, weight: .medium))
-                }
-                .foregroundColor(Color(hex: "999999"))
-                .frame(maxWidth: .infinity)
-                .padding(.top, 4)
-            }
-        }
-    }
-}
-
-// MARK: - Step 6: Budget & Reminders
+// MARK: - Step 4: Lifestyle & Reminders
 struct RemindersStep: View {
     @Binding var profile: UserProfile
     

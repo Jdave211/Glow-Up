@@ -260,12 +260,13 @@ class SupabaseService {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         
-        // Separate skin concerns from hair concerns
-        let skinConcernsList = ["acne", "aging", "dark_spots", "texture", "redness", "dryness", "pigmentation", "oiliness", "sensitivity"]
+        // Keep skin as primary but preserve broader looksmax concerns server-side.
+        let skinConcernsList = ["acne", "aging", "dark_spots", "texture", "redness", "dryness", "pigmentation", "oiliness", "sensitivity", "eye_bags", "teeth_staining", "bloating", "jawline_definition"]
         let hairConcernsList = ["frizz", "breakage", "oily_scalp", "dry_scalp", "thinning", "color_damage", "heat_damage", "scalp_sensitivity"]
         
-        let skinConcerns = profile.concerns.filter { skinConcernsList.contains($0) }
-        let hairConcerns = profile.concerns.filter { hairConcernsList.contains($0) }
+        let normalizedConcerns = profile.concerns.map { $0.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) }
+        let hairConcerns = normalizedConcerns.filter { hairConcernsList.contains($0) }
+        let skinConcerns = normalizedConcerns.filter { skinConcernsList.contains($0) || !hairConcernsList.contains($0) }
 
         var parsedPhotos: [String: String] = [:]
         for photoEntry in profile.photos {
@@ -274,8 +275,8 @@ class SupabaseService {
             let valueStart = photoEntry.index(after: separator)
             let payload = String(photoEntry[valueStart...]).trimmingCharacters(in: .whitespacesAndNewlines)
             guard !payload.isEmpty else { continue }
-            if ["front", "left", "right", "scalp"].contains(slot) {
-                parsedPhotos[slot] = payload
+            if ["front", "left", "right", "scalp", "teeth"].contains(slot) {
+                parsedPhotos[slot == "teeth" ? "scalp" : slot] = payload
             }
         }
         

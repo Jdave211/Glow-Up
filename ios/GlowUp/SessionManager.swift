@@ -11,6 +11,8 @@ class SessionManager {
     private let isOnboardedKey = "com.glowup.isOnboarded"
     private let isPremiumKey = "com.glowup.isPremium"
     private let shippingAddressKey = "com.glowup.shippingAddress"
+    private let pendingSharedRoutineTokenKey = "com.glowup.pendingSharedRoutineToken"
+    private let routineLibraryKeyPrefix = "com.glowup.routineLibrary."
     
     private init() {}
     
@@ -95,4 +97,90 @@ class SessionManager {
     var hasShippingAddress: Bool {
         shippingAddress != nil
     }
+
+    // MARK: - Routine Library
+
+    struct RoutineLibraryItem: Codable, Identifiable {
+        let id: String
+        let title: String
+        let sourceLabel: String?
+        let sourceToken: String?
+        let importedAt: Date
+        let morning: [FeedRoutineStep]
+        let evening: [FeedRoutineStep]
+        let weekly: [FeedRoutineStep]
+    }
+
+    private var routineLibraryKey: String {
+        "\(routineLibraryKeyPrefix)\(userId ?? "guest")"
+    }
+
+    var routineLibrary: [RoutineLibraryItem] {
+        get {
+            guard let data = UserDefaults.standard.data(forKey: routineLibraryKey) else { return [] }
+            return (try? JSONDecoder().decode([RoutineLibraryItem].self, from: data)) ?? []
+        }
+        set {
+            if let data = try? JSONEncoder().encode(newValue) {
+                UserDefaults.standard.set(data, forKey: routineLibraryKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: routineLibraryKey)
+            }
+        }
+    }
+
+    @discardableResult
+    func addRoutineToLibrary(
+        title: String,
+        morning: [FeedRoutineStep],
+        evening: [FeedRoutineStep],
+        weekly: [FeedRoutineStep] = [],
+        sourceLabel: String? = nil,
+        sourceToken: String? = nil
+    ) -> RoutineLibraryItem {
+        let cleanedMorning = morning.sorted { $0.step < $1.step }
+        let cleanedEvening = evening.sorted { $0.step < $1.step }
+        let cleanedWeekly = weekly.sorted { $0.step < $1.step }
+
+        let item = RoutineLibraryItem(
+            id: UUID().uuidString,
+            title: title,
+            sourceLabel: sourceLabel,
+            sourceToken: sourceToken,
+            importedAt: Date(),
+            morning: cleanedMorning,
+            evening: cleanedEvening,
+            weekly: cleanedWeekly
+        )
+
+        var all = routineLibrary
+        all.insert(item, at: 0)
+        // Keep library bounded for lightweight local storage.
+        routineLibrary = Array(all.prefix(50))
+        return item
+    }
+
+    func removeRoutineLibraryItem(id: String) {
+        routineLibrary.removeAll { $0.id == id }
+    }
+
+    // MARK: - Shared Routine Deep Link Queue
+
+    func queueSharedRoutineToken(_ token: String) {
+        let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        UserDefaults.standard.set(trimmed, forKey: pendingSharedRoutineTokenKey)
+    }
+
+    func consumePendingSharedRoutineToken() -> String? {
+        let token = UserDefaults.standard.string(forKey: pendingSharedRoutineTokenKey)
+        UserDefaults.standard.removeObject(forKey: pendingSharedRoutineTokenKey)
+        return token
+    }
+}
+
+extension Notification.Name {
+    static let glowUpOpenRoutineImport = Notification.Name("GlowUpOpenRoutineImport")
+    static let glowUpRoutineDidUpdate = Notification.Name("GlowUpRoutineDidUpdate")
+    static let glowUpNotificationDestination = Notification.Name("GlowUpNotificationDestination")
 }

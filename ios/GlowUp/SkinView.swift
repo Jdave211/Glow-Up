@@ -15,6 +15,7 @@ final class SkinPageViewModel: ObservableObject {
     
     var morningSteps: [SkinPageRoutineStep] { routine?.morning ?? [] }
     var eveningSteps: [SkinPageRoutineStep] { routine?.evening ?? [] }
+    var weeklySteps: [SkinPageRoutineStep] { routine?.weekly ?? [] }
     
     var skinScore: Double {
         let raw = insights?.skin_score ?? 0.85
@@ -262,7 +263,7 @@ struct SkinView: View {
             steps: feedRoutineSteps(for: routineType),
             morningSteps: feedRoutineSteps(for: .morning),
             eveningSteps: feedRoutineSteps(for: .evening),
-            weeklySteps: [],
+            weeklySteps: feedRoutineSteps(for: .weekly),
             completedSteps: completedStepsBinding,
             streaks: $routineStreaks,
             userId: SessionManager.shared.userId ?? "",
@@ -1299,7 +1300,7 @@ struct SkinView: View {
         case .evening:
             source = viewModel.eveningSteps
         case .weekly:
-            source = []
+            source = viewModel.weeklySteps
         }
 
         return source.map { step in

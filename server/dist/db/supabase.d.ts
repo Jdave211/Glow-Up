@@ -118,6 +118,8 @@ export interface DbPhotoCheckIn {
 }
 export declare class DatabaseService {
     private static readonly ROUTINE_KEY_ALPHABET;
+    private static isIgnorableMissingTableError;
+    private static isStoragePathRef;
     static normalizeRoutineKey(input: string | null | undefined): string | null;
     static extractRoutineKey(routineData: any): string | null;
     private static generateRoutineKeyCandidate;
@@ -127,6 +129,8 @@ export declare class DatabaseService {
     static getUserByEmail(email: string): Promise<DbUser | null>;
     static getOrCreateUser(email: string, name: string): Promise<DbUser | null>;
     static getUserById(userId: string): Promise<DbUser | null>;
+    static getUserPhotoStoragePaths(userId: string): Promise<string[]>;
+    static deleteUserAccount(userId: string): Promise<boolean>;
     static markUserOnboarded(userId: string): Promise<boolean>;
     static isUserOnboarded(userId: string): Promise<boolean>;
     static saveProfile(userId: string, profile: {

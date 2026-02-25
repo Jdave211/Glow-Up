@@ -594,6 +594,33 @@ class APIService {
         
         return try JSONDecoder().decode(RoutineCheckinsResponse.self, from: data)
     }
+
+    // MARK: - Account
+
+    func deleteAccount(userId: String) async throws {
+        guard let encodedId = userId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+              let url = URL(string: "\(baseURL)/api/users/\(encodedId)") else {
+            throw APIError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        request.timeoutInterval = 30
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw APIError.serverError
+        }
+
+        guard httpResponse.statusCode == 200 else {
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let message = json["error"] as? String,
+               !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                throw APIError.serverMessage(message)
+            }
+            throw APIError.serverError
+        }
+    }
     
     func markStepComplete(userId: String, routineType: String, stepId: String, stepName: String, date: String? = nil) async throws -> StreaksResponse {
         guard let url = URL(string: "\(baseURL)/api/routine-checkins/complete") else { throw APIError.invalidURL }

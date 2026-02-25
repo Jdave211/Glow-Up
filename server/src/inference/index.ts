@@ -862,11 +862,140 @@ async function ensureFocusCoverage(
   return { routine: nextRoutine, addedFocus };
 }
 
+type TechniqueTarget = {
+  key: string;
+  label: string;
+  routineType: 'morning' | 'evening' | 'weekly';
+  stepName: string;
+  instruction: string;
+  matchTokens: string[];
+};
+
+function normalizeRoutineOrdering(routine: InferenceResult['routine']): InferenceResult['routine'] {
+  const normalizeBucket = (steps: RoutineStep[], routineType: 'morning' | 'evening' | 'weekly') =>
+    (steps || [])
+      .map((step: RoutineStep, index: number) => ({
+        ...step,
+        step: Number.isFinite(Number(step?.step)) && Number(step.step) > 0 ? Number(step.step) : index + 1,
+        frequency: step?.frequency || (routineType === 'weekly' ? 'weekly' : 'daily'),
+      }))
+      .sort((a: RoutineStep, b: RoutineStep) => a.step - b.step)
+      .map((step: RoutineStep, index: number) => ({
+        ...step,
+        step: index + 1,
+      }));
+
+  return {
+    morning: normalizeBucket(routine.morning || [], 'morning'),
+    evening: normalizeBucket(routine.evening || [], 'evening'),
+    weekly: normalizeBucket(routine.weekly || [], 'weekly'),
+  };
+}
+
+function getTechniqueTargets(profile: UserProfileForInference): TechniqueTarget[] {
+  const concernText = (profile.looksmaxConcerns || []).join(' ').toLowerCase();
+  const has = (...tokens: string[]) => tokens.some((token) => concernText.includes(token));
+  const targets: TechniqueTarget[] = [];
+
+  if (has('teeth_staining', 'yellow_teeth', 'teeth')) {
+    targets.push({
+      key: 'oil_pulling',
+      label: 'smile brightening',
+      routineType: 'morning',
+      stepName: 'Oil Pulling',
+      instruction: 'Swish coconut or sesame oil for 5-10 minutes before brushing to support oral freshness and stain control.',
+      matchTokens: ['oil pull', 'oil pulling'],
+    });
+  }
+
+  if (has('jawline_definition', 'jawline', 'weak_jawline', 'mouth_breathing')) {
+    targets.push({
+      key: 'mewing_drill',
+      label: 'jawline support',
+      routineType: 'evening',
+      stepName: 'Tongue Posture Drill',
+      instruction: 'Practice nasal breathing with the full tongue resting on the palate for 10 minutes; keep jaw relaxed.',
+      matchTokens: ['tongue posture', 'mew', 'mewing'],
+    });
+  }
+
+  if (has('bloating', 'facial_bloating')) {
+    targets.push({
+      key: 'debloat_protocol',
+      label: 'de-bloating',
+      routineType: 'weekly',
+      stepName: 'De-Bloat Reset',
+      instruction: 'Run a 7-day low-sodium, lower-sugar check-in and hydrate consistently to reduce facial puffiness.',
+      matchTokens: ['de-bloat', 'bloat'],
+    });
+  }
+
+  if (has('eye_bags', 'under_eye_bags', 'puffy_eyes')) {
+    targets.push({
+      key: 'eye_de_puff',
+      label: 'under-eye depuff',
+      routineType: 'morning',
+      stepName: 'Cold De-Puff',
+      instruction: 'Apply a cool compress for 2-3 minutes and avoid late salty meals to improve under-eye puffiness.',
+      matchTokens: ['de-puff', 'cold compress', 'under-eye'],
+    });
+  }
+
+  if (has('hair_thinning', 'thinning', 'frizz')) {
+    targets.push({
+      key: 'scalp_massage',
+      label: 'hair support',
+      routineType: 'evening',
+      stepName: 'Scalp Massage',
+      instruction: 'Massage scalp for 3-5 minutes with light pressure to support circulation and reduce tension.',
+      matchTokens: ['scalp massage'],
+    });
+  }
+
+  return targets.slice(0, 3);
+}
+
+function ensureTechniqueCoverage(
+  profile: UserProfileForInference,
+  routine: InferenceResult['routine']
+): { routine: InferenceResult['routine']; addedMethods: string[] } {
+  const targets = getTechniqueTargets(profile);
+  if (targets.length === 0) return { routine, addedMethods: [] };
+
+  const nextRoutine: InferenceResult['routine'] = {
+    morning: [...routine.morning],
+    evening: [...routine.evening],
+    weekly: [...routine.weekly],
+  };
+  const addedMethods: string[] = [];
+
+  for (const target of targets) {
+    const bucket = nextRoutine[target.routineType];
+    const hasExisting = bucket.some((step) => {
+      const text = `${step.name} ${step.instructions}`.toLowerCase();
+      return target.matchTokens.some((token) => text.includes(token));
+    });
+    if (hasExisting) continue;
+
+    if (target.routineType !== 'weekly' && bucket.length >= 5) continue;
+    if (target.routineType === 'weekly' && bucket.length >= 3) continue;
+
+    bucket.push({
+      step: bucket.length + 1,
+      name: target.stepName,
+      instructions: target.instruction,
+      frequency: target.routineType === 'weekly' ? 'weekly' : 'daily',
+    });
+    addedMethods.push(target.label);
+  }
+
+  return { routine: normalizeRoutineOrdering(nextRoutine), addedMethods };
+}
+
 /**
  * Use fine-tuned model with tool calling to generate personalized routine.
- * Forces tool calls on the first round so every routine step has a real product.
- * Collects all products discovered during tool calls and resolves each
- * routine step to a real DB product (with id, image_url, buy_link).
+ * Core skincare steps should be linked to real products.
+ * Allows a small number of non-product technique steps when relevant.
  */
 async function generatePersonalizedRoutine(
   profile: UserProfileForInference,
@@ -883,8 +1012,8 @@ async function generatePersonalizedRoutine(
     : 'not specified';
   const budgetMax = profile.budget === 'low' ? 25 : profile.budget === 'high' ? 100 : 60;
 
-  const systemPrompt = `You are GlowUp AI, a skincare expert creating a personalized routine after onboarding.
-You MUST use the search_products tool to find real products from our database for EVERY step. Do NOT invent or hallucinate product names.
+  const systemPrompt = `You are GlowUp AI, a skincare + looksmax coach creating a personalized routine after onboarding.
+You MUST use the search_products tool to find real products from our database for core skincare steps. Do NOT invent product names.
 
 FOUNDATIONAL GUIDANCE:
 ${FOUNDATIONAL_LOOKSMAX_GUIDANCE}
@@ -892,27 +1021,29 @@ ${FOUNDATIONAL_LOOKSMAX_GUIDANCE}
 WORKFLOW:
 1. First, call search_products multiple times to find: a cleanser, treatment/serum, moisturizer, sunscreen (AM only), and exfoliant (weekly). Filter by the user's skin type, concerns, and budget.
 2. After receiving product results, build the routine JSON using ONLY products found in tool results.
-3. Every step MUST have a valid product_id, product_name, product_brand, and product_price copied directly from the tool results.
+3. Include optional non-product method steps only when they clearly match looksmax concerns (for example: mewing drill, oil pulling, de-bloating reset).
+4. For product-linked steps, include valid product_id, product_name, product_brand, and product_price copied directly from tool results.
 
 RESPOND with valid JSON in this exact format (no markdown wrapping):
 {
-  "morning": [{"step": 1, "name": "Cleanser", "product_id": "uuid-from-tool-result", "product_name": "Full Product Name", "product_brand": "Brand", "product_price": 12.99, "instructions": "How to use it", "frequency": "daily"}],
-  "evening": [{"step": 1, "name": "Cleanser", "product_id": "uuid-from-tool-result", "product_name": "...", "product_brand": "...", "product_price": 0, "instructions": "...", "frequency": "daily"}],
-  "weekly": [{"step": 1, "name": "Exfoliation", "product_id": "uuid-from-tool-result", "product_name": "...", "product_brand": "...", "product_price": 0, "instructions": "...", "frequency": "weekly"}],
+  "morning": [{"step": 1, "name": "Cleanser", "instructions": "How to use it", "frequency": "daily", "product_id": "uuid-from-tool-result", "product_name": "Full Product Name", "product_brand": "Brand", "product_price": 12.99}],
+  "evening": [{"step": 1, "name": "Tongue Posture Drill", "instructions": "10 min nasal-breathing posture practice", "frequency": "daily"}],
+  "weekly": [{"step": 1, "name": "Exfoliation", "instructions": "...", "frequency": "weekly", "product_id": "uuid-from-tool-result", "product_name": "...", "product_brand": "...", "product_price": 0}],
   "summary": "2-sentence summary of the routine approach",
   "tips": ["tip 1", "tip 2", "tip 3"]
 }
 
 RULES:
-- Morning routine: 3-5 steps (cleanser, serum/treatment, moisturizer, sunscreen).
-- Evening routine: 3-5 steps (cleanser, treatment/active, moisturizer).
-- Weekly reset: 1-3 steps (exfoliant, mask, or clarifying treatment).
-- Include targeted treatment steps that directly address the user's top goals/concerns (e.g. acne, dark spots, barrier repair, brightening).
+- Morning routine: 3-5 steps (cleanser, serum/treatment, moisturizer, sunscreen baseline).
+- Evening routine: 3-5 steps (cleanser, treatment/active, moisturizer baseline).
+- Weekly reset: 1-3 steps (exfoliant, mask, clarifying treatment, or technique reset).
+- Include targeted steps that directly address top goals/concerns (e.g. acne, dark spots, barrier repair, brightening, puffiness, smile brightness).
 - Products can appear in multiple routines (e.g. same cleanser AM and PM).
-- product_id MUST be a real UUID from tool results — NEVER make one up.
-- Keep skincare as the primary focus. In "tips", include at most 2 secondary looksmax actions for smile/teeth, hair, or lifestyle if relevant.`;
+- Keep skincare as the primary focus.
+- Include 0-2 technique-only steps total across the routine.
+- If product_id is present, it MUST be a real UUID from tool results — NEVER make one up.`;
 
-  const userMessage = `Build my complete skincare routine. Here is my profile:
+  const userMessage = `Build my complete photo-led routine. Here is my profile:
 
 - Skin type: ${profile.skinType}
 - Skin tone: ${skinToneLabel}
@@ -923,7 +1054,7 @@ RULES:
 - Budget: ${profile.budget || 'medium'} (~$${budgetMax} max per product)
 - Fragrance-free: ${profile.fragranceFree ? 'yes' : 'no'}
 
-Search for products that match my profile, then build the full routine JSON.`;
+Search for products that match my profile, then build the full routine JSON with core skincare + optional technique steps if relevant.`;
 
   // ── Seed product maps with pre-searched products ──
   const toolProductsById = new Map<string, any>();
@@ -1110,7 +1241,7 @@ Search for products that match my profile, then build the full routine JSON.`;
       }
 
       return {
-        step: s.step,
+        step: Number.isFinite(Number(s?.step)) && Number(s.step) > 0 ? Number(s.step) : 1,
         name: s.name || `Step ${s.step}`,
         product,
         instructions: s.instructions || '',
@@ -1146,6 +1277,13 @@ Search for products that match my profile, then build the full routine JSON.`;
     if (coverage.addedFocus.length > 0) {
       console.log(`🎯 Added focused routine products for: ${coverage.addedFocus.join(', ')}`);
     }
+
+    const techniqueCoverage = ensureTechniqueCoverage(profile, routine);
+    routine = techniqueCoverage.routine;
+    if (techniqueCoverage.addedMethods.length > 0) {
+      console.log(`🧩 Added technique steps for: ${techniqueCoverage.addedMethods.join(', ')}`);
+    }
+    routine = normalizeRoutineOrdering(routine);
 
     const resolvedCount = [...routine.morning, ...routine.evening, ...routine.weekly]
       .filter(s => s.product && s.product.id).length;
@@ -1231,24 +1369,53 @@ function generateFallbackRoutine(
     tips.push(genericTips[tips.length] || genericTips[0]);
   }
   
+  const morning: RoutineStep[] = [
+    { step: 1, name: 'Cleanser', product: cleanser, instructions: profile.skinType === 'oily' ? 'Gently cleanse with lukewarm water to remove overnight oils' : 'Quick rinse or skip if skin feels balanced', frequency: 'daily' },
+    ...(toner ? [{ step: 2, name: 'Toner/Essence', product: toner, instructions: 'Pat onto skin while still damp', frequency: 'daily' }] : []),
+    { step: toner ? 3 : 2, name: 'Moisturizer', product: moisturizer, instructions: 'Apply to damp skin for better absorption', frequency: 'daily' },
+    { step: toner ? 4 : 3, name: 'Sunscreen', product: sunscreen, instructions: 'Apply generously (2 finger lengths) as final step - wait 15 min before sun exposure', frequency: 'daily' }
+  ];
+
+  const evening: RoutineStep[] = [
+    { step: 1, name: 'Cleanser', product: cleanser, instructions: 'Double cleanse if wearing makeup/sunscreen - oil cleanser first, then regular', frequency: 'daily' },
+    ...(serum ? [{ step: 2, name: 'Treatment/Serum', product: serum, instructions: 'Apply to clean, dry skin - less is more!', frequency: 'daily' }] : []),
+    { step: serum ? 3 : 2, name: 'Moisturizer', product: moisturizer, instructions: 'Seal in actives and hydration', frequency: 'daily' }
+  ];
+
+  const weekly: RoutineStep[] = [
+    { step: 1, name: 'Exfoliation', product: serum, instructions: 'Use a gentle exfoliant once a week to reset your skin', frequency: 'weekly' },
+    { step: 2, name: 'Mask', product: moisturizer, instructions: 'Apply a hydrating or clarifying mask for 10-15 minutes', frequency: 'weekly' }
+  ];
+
+  if (profile.looksmaxConcerns?.includes('teeth_staining') || profile.looksmaxConcerns?.includes('yellow_teeth')) {
+    morning.push({
+      step: morning.length + 1,
+      name: 'Oil Pulling',
+      instructions: 'Swish oil for 5-10 minutes before brushing to support fresher breath and reduce visible staining over time.',
+      frequency: 'daily'
+    });
+  }
+
+  if (profile.looksmaxConcerns?.includes('jawline_definition') || profile.looksmaxConcerns?.includes('mouth_breathing')) {
+    evening.push({
+      step: evening.length + 1,
+      name: 'Tongue Posture Drill',
+      instructions: 'Practice nasal breathing and full-tongue posture on the palate for 10 minutes daily.',
+      frequency: 'daily'
+    });
+  }
+
+  if (profile.looksmaxConcerns?.includes('bloating') || profile.looksmaxConcerns?.includes('facial_bloating')) {
+    weekly.push({
+      step: weekly.length + 1,
+      name: 'De-Bloat Reset',
+      instructions: 'Track sodium and sugar intake for 7 days while increasing water intake to reduce facial puffiness.',
+      frequency: 'weekly'
+    });
+  }
+
   return {
-    routine: {
-      morning: [
-        { step: 1, name: 'Cleanser', product: cleanser, instructions: profile.skinType === 'oily' ? 'Gently cleanse with lukewarm water to remove overnight oils' : 'Quick rinse or skip if skin feels balanced', frequency: 'daily' },
-        ...(toner ? [{ step: 2, name: 'Toner/Essence', product: toner, instructions: 'Pat onto skin while still damp', frequency: 'daily' }] : []),
-        { step: toner ? 3 : 2, name: 'Moisturizer', product: moisturizer, instructions: 'Apply to damp skin for better absorption', frequency: 'daily' },
-        { step: toner ? 4 : 3, name: 'Sunscreen', product: sunscreen, instructions: 'Apply generously (2 finger lengths) as final step - wait 15 min before sun exposure', frequency: 'daily' }
-      ],
-      evening: [
-        { step: 1, name: 'Cleanser', product: cleanser, instructions: 'Double cleanse if wearing makeup/sunscreen - oil cleanser first, then regular', frequency: 'daily' },
-        ...(serum ? [{ step: 2, name: 'Treatment/Serum', product: serum, instructions: 'Apply to clean, dry skin - less is more!', frequency: 'daily' }] : []),
-        { step: serum ? 3 : 2, name: 'Moisturizer', product: moisturizer, instructions: 'Seal in actives and hydration', frequency: 'daily' }
-      ],
-      weekly: [
-        { step: 1, name: 'Exfoliation', product: serum, instructions: 'Use a gentle exfoliant once a week to reset your skin', frequency: 'weekly' },
-        { step: 2, name: 'Mask', product: moisturizer, instructions: 'Apply a hydrating or clarifying mask for 10–15 minutes', frequency: 'weekly' }
-      ]
-    },
+    routine: normalizeRoutineOrdering({ morning, evening, weekly }),
     summary: `A ${profile.skinType} skin routine tailored to your ${profile.skinGoals?.[0]?.replace(/_/g, ' ') || 'skincare'} goals. ${profile.budget === 'low' ? 'Budget-friendly picks that deliver results.' : 'Quality products selected for maximum efficacy.'}`,
     tips: tips.slice(0, 3)
   };
@@ -1377,6 +1544,8 @@ export async function runInference(profile: UserProfileForInference): Promise<In
     profile.skinType,
     ...(profile.skinConcerns || []),
     ...(profile.skinGoals || []),
+    ...(profile.looksmaxConcerns || []),
+    ...(profile.hairConcerns || []),
     profile.fragranceFree ? 'fragrance-free' : ''
   ].filter(Boolean);
   

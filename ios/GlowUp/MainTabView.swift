@@ -1314,6 +1314,10 @@ struct SettingsView: View {
     @AppStorage("glowup.notifications.routine") private var routineReminders = true
     @AppStorage("glowup.notifications.photo") private var photoReminders = true
     @State private var showSignOutAlert = false
+    @State private var showDeleteAccountAlert = false
+    @State private var showDeleteAccountErrorAlert = false
+    @State private var deleteAccountErrorMessage = ""
+    @State private var isDeletingAccount = false
     @State private var showLooksSheet = false
     @State private var showShippingSheet = false
     @State private var showPaywall = false
@@ -1566,6 +1570,45 @@ struct SettingsView: View {
                     .shadow(color: Color.black.opacity(0.06), radius: 10, x: 0, y: 4)
                 }
                 .padding(.horizontal, 20)
+
+                Button(action: { showDeleteAccountAlert = true }) {
+                    HStack(spacing: 16) {
+                        ZStack {
+                            Circle()
+                                .fill(Color(hex: "FFE8EE"))
+                                .frame(width: 36, height: 36)
+
+                            if isDeletingAccount {
+                                ProgressView()
+                                    .tint(Color(hex: "D64545"))
+                                    .scaleEffect(0.8)
+                            } else {
+                                Image(systemName: "trash.fill")
+                                    .font(.system(size: 15, weight: .semibold))
+                                    .foregroundColor(Color(hex: "D64545"))
+                            }
+                        }
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(isDeletingAccount ? "Deleting Account..." : "Delete Account")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundColor(Color(hex: "D64545"))
+                            Text("Permanently remove your data")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundColor(Color(hex: "B86A76"))
+                        }
+
+                        Spacer()
+                    }
+                    .padding(16)
+                    .background(Color.white)
+                    .cornerRadius(20)
+                    .shadow(color: Color.black.opacity(0.06), radius: 10, x: 0, y: 4)
+                }
+                .buttonStyle(.plain)
+                .disabled(isDeletingAccount)
+                .opacity(isDeletingAccount ? 0.75 : 1.0)
+                .padding(.horizontal, 20)
                 
                 Spacer(minLength: 120)
             }
@@ -1598,6 +1641,19 @@ struct SettingsView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(notificationAlertMessage)
+        }
+        .alert("Delete Account Permanently?", isPresented: $showDeleteAccountAlert) {
+            Button("Delete Account", role: .destructive) {
+                Task { await handleDeleteAccount() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This will permanently delete your profile, photos, routines, chats, and progress history. This action cannot be undone.")
+        }
+        .alert("Couldn't Delete Account", isPresented: $showDeleteAccountErrorAlert) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(deleteAccountErrorMessage)
         }
         .sheet(isPresented: $showPaywall) {
             PremiumPaywallView()
@@ -1735,6 +1791,38 @@ struct SettingsView: View {
                     showNotificationAlert = true
                 }
             }
+        }
+    }
+
+    @MainActor
+    private func handleDeleteAccount() async {
+        guard !isDeletingAccount else { return }
+        guard let userId = SessionManager.shared.userId else {
+            SessionManager.shared.signOut()
+            onSignOut?()
+            return
+        }
+
+        isDeletingAccount = true
+        defer { isDeletingAccount = false }
+
+        do {
+            try await APIService.shared.deleteAccount(userId: userId)
+
+            let progressHistoryKey = "com.glowup.progressHistory.\(userId)"
+            UserDefaults.standard.removeObject(forKey: progressHistoryKey)
+            SessionManager.shared.routineLibrary = []
+            NotificationManager.shared.clearAll()
+            SessionManager.shared.signOut()
+            onSignOut?()
+        } catch {
+            deleteAccountErrorMessage =
+                (error as? LocalizedError)?.errorDescription ??
+                error.localizedDescription
+            if deleteAccountErrorMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                deleteAccountErrorMessage = "Unable to delete your account right now. Please try again."
+            }
+            showDeleteAccountErrorAlert = true
         }
     }
     

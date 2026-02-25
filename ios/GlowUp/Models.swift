@@ -363,6 +363,7 @@ struct SkinPageProfile: Codable {
 struct SkinPageRoutine: Codable {
     let morning: [SkinPageRoutineStep]
     let evening: [SkinPageRoutineStep]
+    let weekly: [SkinPageRoutineStep]?
 }
 
 struct SkinPageRoutineStep: Codable, Identifiable {

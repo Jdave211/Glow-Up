@@ -24,6 +24,17 @@ const supabaseKey = supabaseServiceRoleKey || supabaseAnonKey;
 exports.supabase = (0, supabase_js_1.createClient)(supabaseUrl, supabaseKey);
 // Database service functions
 class DatabaseService {
+    static isIgnorableMissingTableError(error) {
+        if (!error || typeof error !== 'object')
+            return false;
+        const code = error.code;
+        return code === '42P01';
+    }
+    static isStoragePathRef(ref) {
+        if (typeof ref !== 'string' || !ref)
+            return false;
+        return !ref.startsWith('http://') && !ref.startsWith('https://') && !ref.startsWith('data:');
+    }
     static normalizeRoutineKey(input) {
         if (!input)
             return null;
@@ -110,6 +121,98 @@ class DatabaseService {
         if (error)
             return null;
         return data;
+    }
+    static async getUserPhotoStoragePaths(userId) {
+        const paths = new Set();
+        const addPath = (value) => {
+            if (this.isStoragePathRef(value)) {
+                paths.add(value);
+            }
+        };
+        const { data: profileRows, error: profileError } = await exports.supabase
+            .from('skin_profiles')
+            .select('photo_front_url, photo_left_url, photo_right_url, photo_scalp_url')
+            .eq('user_id', userId);
+        if (profileError && !this.isIgnorableMissingTableError(profileError)) {
+            console.error('Error fetching skin profile photo refs:', profileError);
+        }
+        for (const row of profileRows || []) {
+            addPath(row.photo_front_url);
+            addPath(row.photo_left_url);
+            addPath(row.photo_right_url);
+            addPath(row.photo_scalp_url);
+        }
+        const { data: checkInRows, error: checkInError } = await exports.supabase
+            .from('photo_check_ins')
+            .select('photo_front_url, photo_left_url, photo_right_url')
+            .eq('user_id', userId);
+        if (checkInError && !this.isIgnorableMissingTableError(checkInError)) {
+            console.error('Error fetching check-in photo refs:', checkInError);
+        }
+        for (const row of checkInRows || []) {
+            addPath(row.photo_front_url);
+            addPath(row.photo_left_url);
+            addPath(row.photo_right_url);
+        }
+        return Array.from(paths);
+    }
+    static async deleteUserAccount(userId) {
+        const tableDeletes = [
+            { table: 'routine_checkins', column: 'user_id' },
+            { table: 'routine_streaks', column: 'user_id' },
+            { table: 'skin_insights', column: 'user_id' },
+            { table: 'cart_items', column: 'user_id' },
+            { table: 'photo_check_ins', column: 'user_id' },
+            { table: 'routines', column: 'user_id' },
+            { table: 'skin_profiles', column: 'user_id' },
+            { table: 'profiles', column: 'user_id' },
+        ];
+        const { data: conversations, error: conversationsError } = await exports.supabase
+            .from('chat_conversations')
+            .select('id')
+            .eq('user_id', userId);
+        if (conversationsError && !this.isIgnorableMissingTableError(conversationsError)) {
+            console.error('Error loading conversations for account deletion:', conversationsError);
+            return false;
+        }
+        const conversationIds = (conversations || []).map((row) => row.id);
+        if (conversationIds.length > 0) {
+            const { error: messagesDeleteError } = await exports.supabase
+                .from('chat_messages')
+                .delete()
+                .in('conversation_id', conversationIds);
+            if (messagesDeleteError && !this.isIgnorableMissingTableError(messagesDeleteError)) {
+                console.error('Error deleting chat messages during account deletion:', messagesDeleteError);
+                return false;
+            }
+        }
+        const { error: conversationsDeleteError } = await exports.supabase
+            .from('chat_conversations')
+            .delete()
+            .eq('user_id', userId);
+        if (conversationsDeleteError && !this.isIgnorableMissingTableError(conversationsDeleteError)) {
+            console.error('Error deleting conversations during account deletion:', conversationsDeleteError);
+            return false;
+        }
+        for (const target of tableDeletes) {
+            const { error } = await exports.supabase
+                .from(target.table)
+                .delete()
+                .eq(target.column, userId);
+            if (error && !this.isIgnorableMissingTableError(error)) {
+                console.error(`Error deleting ${target.table} during account deletion:`, error);
+                return false;
+            }
+        }
+        const { error: userDeleteError } = await exports.supabase
+            .from('users')
+            .delete()
+            .eq('id', userId);
+        if (userDeleteError && !this.isIgnorableMissingTableError(userDeleteError)) {
+            console.error('Error deleting user during account deletion:', userDeleteError);
+            return false;
+        }
+        return true;
     }
     static async markUserOnboarded(userId) {
         console.log('🔄 Attempting to mark user onboarded:', userId);

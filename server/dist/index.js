@@ -405,6 +405,9 @@ function deriveConcernSignalsFromImageAnalysis(imageAnalysis) {
     const looksmaxDetected = Array.isArray(imageAnalysis.looksmax_concerns)
         ? imageAnalysis.looksmax_concerns.map((c) => String(c).toLowerCase())
         : [];
+    const looksmaxActions = Array.isArray(imageAnalysis.looksmax_actions)
+        ? imageAnalysis.looksmax_actions.map((a) => String(a).toLowerCase())
+        : [];
     for (const concern of detected) {
         if (concern.includes('texture'))
             concerns.add('texture');
@@ -426,14 +429,28 @@ function deriveConcernSignalsFromImageAnalysis(imageAnalysis) {
     if (!Number.isNaN(oiliness) && oiliness > 0.62)
         concerns.add('oiliness');
     for (const concern of looksmaxDetected) {
-        if (concern.includes('teeth'))
+        if (concern.includes('teeth') || concern.includes('smile'))
             concerns.add('teeth_staining');
         if (concern.includes('bloat'))
             concerns.add('bloating');
-        if (concern.includes('eye_bag') || concern.includes('under_eye'))
+        if (concern.includes('eye_bag') || concern.includes('under_eye') || concern.includes('puffy'))
             concerns.add('eye_bags');
         if (concern.includes('hair') && concern.includes('thin'))
             concerns.add('hair_thinning');
+        if (concern.includes('frizz'))
+            concerns.add('frizz');
+        if (concern.includes('jaw') || concern.includes('chin'))
+            concerns.add('jawline_definition');
+        if (concern.includes('mouth_breath'))
+            concerns.add('mouth_breathing');
+    }
+    for (const action of looksmaxActions) {
+        if (action.includes('mew') || action.includes('tongue posture'))
+            concerns.add('jawline_definition');
+        if (action.includes('oil pull'))
+            concerns.add('teeth_staining');
+        if (action.includes('nasal breathing'))
+            concerns.add('mouth_breathing');
     }
     return Array.from(concerns);
 }
@@ -442,6 +459,34 @@ function normalizeConcernTag(value) {
         .trim()
         .toLowerCase()
         .replace(/\s+/g, '_');
+}
+const SKIN_CONCERN_TAGS = new Set([
+    'acne', 'aging', 'dryness', 'oiliness', 'pigmentation', 'sensitivity',
+    'redness', 'texture', 'dark_spots', 'pores', 'dehydration'
+]);
+const HAIR_CONCERN_TAGS = new Set([
+    'frizz', 'damage', 'breakage', 'oily_scalp', 'dry_scalp', 'thinning',
+    'hair_thinning', 'color_damage', 'heat_damage', 'scalp_sensitivity'
+]);
+const LOOKSMAX_CONCERN_TAGS = new Set([
+    'eye_bags', 'under_eye_bags', 'teeth_staining', 'yellow_teeth', 'bloating',
+    'facial_bloating', 'hair_thinning', 'thinning', 'frizz', 'jawline_definition',
+    'mouth_breathing', 'smile', 'gum_health', 'facial_asymmetry'
+]);
+function classifyConcernsForInference(rawConcerns) {
+    const normalized = Array.from(new Set((Array.isArray(rawConcerns) ? rawConcerns : [])
+        .map((c) => normalizeConcernTag(c))
+        .filter(Boolean)));
+    const skinConcerns = normalized.filter((c) => SKIN_CONCERN_TAGS.has(c));
+    const hairConcerns = normalized.filter((c) => HAIR_CONCERN_TAGS.has(c));
+    const looksmaxConcerns = normalized.filter((c) => {
+        if (LOOKSMAX_CONCERN_TAGS.has(c))
+            return true;
+        if (SKIN_CONCERN_TAGS.has(c) || HAIR_CONCERN_TAGS.has(c))
+            return false;
+        return /(teeth|jaw|chin|face|bloat|eye|mouth|lip|smile|posture|mew|oil_pull|tongue|gum|hairline)/.test(c);
+    });
+    return { skinConcerns, hairConcerns, looksmaxConcerns };
 }
 function buildLooksmaxTips(profile, imageAnalysis) {
     const tips = [];
@@ -471,13 +516,16 @@ function buildLooksmaxTips(profile, imageAnalysis) {
         tips.push('To de-bloat facially, lower sodium and sugary snacks for 10-14 days and increase water intake.');
     }
     if (has('teeth_staining', 'yellow_teeth')) {
-        tips.push('For a brighter smile, limit staining drinks, rinse after coffee/tea, and use a whitening routine 2-3x/week.');
+        tips.push('Use oil pulling for 5-10 minutes in the morning, and rinse after coffee/tea to support a brighter smile.');
     }
     if (has('eye_bags', 'under_eye_bags', 'puffy_eyes')) {
         tips.push('Prioritize 7-8 hours sleep and avoid late high-salt meals to reduce under-eye puffiness.');
     }
     if (has('hair_thinning', 'thinning')) {
         tips.push('Support hair density with protein-rich meals, gentle scalp care, and reduced heat styling frequency.');
+    }
+    if (has('jawline_definition', 'weak_jawline', 'mouth_breathing')) {
+        tips.push('Practice daytime nasal breathing with correct tongue posture (mewing basics) for 10-15 minutes daily.');
     }
     if (has('frizz')) {
         tips.push('Use a humidity-protective leave-in and avoid aggressive towel drying to keep hair smoother.');
@@ -500,6 +548,7 @@ app.post('/api/analyze', async (req, res) => {
             const profileConcerns = Array.isArray(profile.concerns) ? profile.concerns : [];
             const imageSignalConcerns = deriveConcernSignalsFromImageAnalysis(savedSkinProfile?.image_analysis);
             const mergedConcerns = Array.from(new Set([...profileConcerns, ...imageSignalConcerns]));
+            const classifiedConcerns = classifyConcernsForInference(mergedConcerns);
             const photoSkinType = String(savedSkinProfile?.image_analysis?.skin?.detected_type || '').toLowerCase();
             const photoConfidence = Number(savedSkinProfile?.image_analysis?.confidence_scores?.skin_analysis || 0);
             const resolvedSkinType = (photoSkinType && photoConfidence >= 0.7)
@@ -512,10 +561,10 @@ app.post('/api/analyze', async (req, res) => {
                 skinType: resolvedSkinType,
                 skinTone: profile.skinTone,
                 skinGoals: profile.skinGoals,
-                skinConcerns: mergedConcerns.filter((c) => ['acne', 'aging', 'dryness', 'oiliness', 'pigmentation', 'sensitivity', 'redness', 'texture', 'dark_spots'].includes(c)),
+                skinConcerns: classifiedConcerns.skinConcerns,
                 hairType: profile.hairType,
-                hairConcerns: mergedConcerns.filter((c) => ['frizz', 'damage', 'breakage', 'oily_scalp', 'dry_scalp', 'thinning', 'hair_thinning', 'color_damage', 'heat_damage'].includes(c)),
-                looksmaxConcerns: mergedConcerns.filter((c) => ['eye_bags', 'under_eye_bags', 'teeth_staining', 'yellow_teeth', 'bloating', 'facial_bloating', 'hair_thinning', 'thinning', 'frizz', 'jawline_definition'].includes(c)),
+                hairConcerns: classifiedConcerns.hairConcerns,
+                looksmaxConcerns: classifiedConcerns.looksmaxConcerns,
                 washFrequency: profile.washFrequency,
                 sunscreenUsage: profile.sunscreenUsage,
                 budget: profile.budget,
@@ -707,6 +756,36 @@ app.get('/api/users/:userId', async (req, res) => {
     catch (error) {
         console.error('Error:', error);
         res.status(500).json({ error: 'Server error' });
+    }
+});
+// Delete user account and associated data
+app.delete('/api/users/:userId', async (req, res) => {
+    try {
+        const userId = req.params.userId;
+        if (!userId) {
+            return res.status(400).json({ error: 'User ID is required' });
+        }
+        const photoPaths = await supabase_1.DatabaseService.getUserPhotoStoragePaths(userId);
+        const deleted = await supabase_1.DatabaseService.deleteUserAccount(userId);
+        if (!deleted) {
+            return res.status(500).json({ error: 'Failed to delete account' });
+        }
+        if (photoPaths.length > 0) {
+            await removePrivatePhotoPaths(photoPaths);
+        }
+        feedCache.delete(`feed:${userId}`);
+        skinPageCache.delete(`skin-page:${userId}`);
+        latestOrderByUser.delete(userId);
+        for (const [orderId, record] of orderTrackingStore.entries()) {
+            if (record.userId === userId) {
+                orderTrackingStore.delete(orderId);
+            }
+        }
+        return res.json({ success: true });
+    }
+    catch (error) {
+        console.error('Error deleting user account:', error);
+        return res.status(500).json({ error: 'Server error' });
     }
 });
 // ═══════════════════════════════════════════════════════════════
@@ -947,13 +1026,37 @@ function routineHasLinkedProducts(routineData) {
     ];
     return allSteps.some((s) => Boolean(s?.product?.id || s?.product_id));
 }
+function routineHasAnySteps(routineData) {
+    const routine = getRoutineObjectFromData(routineData);
+    if (!routine)
+        return false;
+    const allSteps = [
+        ...(routine.morning || []),
+        ...(routine.evening || []),
+        ...(routine.weekly || []),
+    ];
+    return allSteps.some((s) => {
+        const hasName = String(s?.name || '').trim().length > 0;
+        const hasInstructions = String(s?.instructions || s?.tip || '').trim().length > 0;
+        const hasProduct = Boolean(s?.product?.id || s?.product_id);
+        return hasName || hasInstructions || hasProduct;
+    });
+}
+function routinePreservesManualSteps(routineData) {
+    const meta = routineData?.meta || routineData?.inference?.meta || {};
+    const source = String(meta?.source || '').toLowerCase();
+    return (source === 'manual_edit' ||
+        source === 'manual' ||
+        meta?.allow_non_product_steps === true ||
+        meta?.preserve_without_products === true);
+}
 function mapDbProfileToInference(profile) {
     const profileSkinConcerns = Array.isArray(profile?.skin_concerns) ? profile.skin_concerns : [];
+    const profileHairConcerns = Array.isArray(profile?.hair_concerns) ? profile.hair_concerns : [];
     const imageSignalConcerns = deriveConcernSignalsFromImageAnalysis(profile?.image_analysis);
-    const mergedSkinConcerns = Array.from(new Set([...profileSkinConcerns, ...imageSignalConcerns]))
+    const mergedConcerns = Array.from(new Set([...profileSkinConcerns, ...profileHairConcerns, ...imageSignalConcerns]))
         .map((c) => String(c).toLowerCase().replace(/\s+/g, '_'));
-    const hairConcerns = (Array.isArray(profile?.hair_concerns) ? profile.hair_concerns : [])
-        .map((c) => String(c).toLowerCase().replace(/\s+/g, '_'));
+    const classifiedConcerns = classifyConcernsForInference(mergedConcerns);
     const photoSkinType = String(profile?.image_analysis?.skin?.detected_type || '').toLowerCase();
     const photoConfidence = Number(profile?.image_analysis?.confidence_scores?.skin_analysis || 0);
     const resolvedSkinType = (photoSkinType && photoConfidence >= 0.7)
@@ -966,10 +1069,10 @@ function mapDbProfileToInference(profile) {
         skinType: resolvedSkinType,
         skinTone: profile?.skin_tone,
         skinGoals: Array.isArray(profile?.skin_goals) ? profile.skin_goals : [],
-        skinConcerns: mergedSkinConcerns.filter((c) => ['acne', 'aging', 'dryness', 'oiliness', 'pigmentation', 'sensitivity', 'redness', 'texture', 'dark_spots'].includes(c)),
+        skinConcerns: classifiedConcerns.skinConcerns,
         hairType: profile?.hair_type || undefined,
-        hairConcerns: hairConcerns.filter((c) => ['frizz', 'damage', 'breakage', 'oily_scalp', 'dry_scalp', 'thinning', 'hair_thinning', 'color_damage', 'heat_damage'].includes(c)),
-        looksmaxConcerns: mergedSkinConcerns.filter((c) => ['eye_bags', 'under_eye_bags', 'teeth_staining', 'yellow_teeth', 'bloating', 'facial_bloating', 'hair_thinning', 'thinning', 'frizz', 'jawline_definition'].includes(c)),
+        hairConcerns: classifiedConcerns.hairConcerns,
+        looksmaxConcerns: classifiedConcerns.looksmaxConcerns,
         washFrequency: profile?.wash_frequency || undefined,
         sunscreenUsage: profile?.sunscreen_usage || undefined,
         budget: profile?.budget || 'medium',
@@ -982,8 +1085,14 @@ function mapDbProfileToInference(profile) {
     };
 }
 async function ensureUserHasProductRoutine(userId, profile, latestRoutineRow) {
-    if (latestRoutineRow?.routine_data && routineHasLinkedProducts(latestRoutineRow.routine_data)) {
-        return latestRoutineRow;
+    if (latestRoutineRow?.routine_data) {
+        if (routineHasLinkedProducts(latestRoutineRow.routine_data)) {
+            return latestRoutineRow;
+        }
+        if (routineHasAnySteps(latestRoutineRow.routine_data) && routinePreservesManualSteps(latestRoutineRow.routine_data)) {
+            console.log(`✍️ Keeping manual routine for ${userId} (non-product steps enabled).`);
+            return latestRoutineRow;
+        }
     }
     try {
         console.log(`🧴 No product-linked routine found for ${userId}. Generating one from inference...`);
@@ -1140,14 +1249,27 @@ app.post('/api/routine/update', async (req, res) => {
                     return data[0];
             }
             if (step?.product_name) {
-                const q = String(step.product_name).trim().replace(/[,%]/g, ' ');
+                const q = String(step.product_name)
+                    .trim()
+                    .replace(/[,%'"]/g, ' ')
+                    .replace(/\s+/g, ' ')
+                    .trim();
                 if (q.length > 0) {
-                    const { data } = await supabase_1.supabase
+                    const pattern = `%${q}%`;
+                    let { data } = await supabase_1.supabase
                         .from('products')
                         .select('id, name, brand, price, category, image_url, buy_link, rating, summary, description')
-                        .or(`name.ilike.%${q}%,brand.ilike.%${q}%`)
+                        .ilike('name', pattern)
                         .order('rating', { ascending: false })
                         .limit(1);
+                    if ((!data || !data[0])) {
+                        ({ data } = await supabase_1.supabase
+                            .from('products')
+                            .select('id, name, brand, price, category, image_url, buy_link, rating, summary, description')
+                            .ilike('brand', pattern)
+                            .order('rating', { ascending: false })
+                            .limit(1));
+                    }
                     if (data && data[0])
                         return data[0];
                 }
@@ -1189,7 +1311,15 @@ app.post('/api/routine/update', async (req, res) => {
             inference: {
                 routine: { morning, evening, weekly },
                 summary: summary || 'Routine updated by user',
-                personalized_tips: [],
+                personalized_tips: Array.isArray(latestRoutine?.routine_data?.inference?.personalized_tips)
+                    ? latestRoutine.routine_data.inference.personalized_tips
+                    : [],
+            },
+            meta: {
+                source: 'manual_edit',
+                allow_non_product_steps: true,
+                preserve_without_products: true,
+                updated_at: new Date().toISOString(),
             },
         };
         // Prefer current skin profile id when present; for legacy accounts, fall back.
@@ -2327,50 +2457,64 @@ function computePhotoSignalHeuristics(buffers) {
 async function analyzeImagesWithVisionModel(imageUrls) {
     if (!openaiChat || imageUrls.length === 0)
         return null;
-    const visionModel = process.env.GLOWUP_VISION_MODEL || 'gpt-4o-mini';
+    const preferredInferenceModel = (0, foundational_guidance_1.resolveGlowupModel)('GLOWUP_INFERENCE_MODEL', 'GLOWUP_CHAT_MODEL');
+    const candidateModels = Array.from(new Set([
+        process.env.GLOWUP_ONBOARDING_VISION_MODEL?.trim(),
+        preferredInferenceModel?.trim(),
+        process.env.GLOWUP_VISION_MODEL?.trim(),
+        'gpt-4o-mini',
+    ].filter((v) => Boolean(v))));
     const imageContent = imageUrls.slice(0, 3).map(url => ({ type: 'image_url', image_url: { url, detail: 'low' } }));
-    const completion = await openaiChat.chat.completions.create({
-        model: visionModel,
-        response_format: { type: 'json_object' },
-        temperature: 0.2,
-        max_tokens: 700,
-        messages: [
-            {
-                role: 'system',
-                content: 'Analyze onboarding face photos for objective looksmaxing guidance. Return ONLY JSON with keys: detected_tone, detected_type, oiliness_score, hydration_score, texture_score, concerns_detected (array), redness_areas (array), pore_visibility (low|moderate|high), confidence (0-1), looksmax_concerns (array of tags), looksmax_actions (array of concise actions). Scores must be numbers between 0 and 1.'
-            },
-            {
-                role: 'user',
-                content: [
-                    { type: 'text', text: 'Evaluate the photos and return the JSON only.' },
-                    ...imageContent
+    for (const visionModel of candidateModels) {
+        try {
+            const completion = await openaiChat.chat.completions.create({
+                model: visionModel,
+                response_format: { type: 'json_object' },
+                temperature: 0.2,
+                max_tokens: 700,
+                messages: [
+                    {
+                        role: 'system',
+                        content: 'Analyze onboarding face photos for objective looksmaxing guidance. Return ONLY JSON with keys: detected_tone, detected_type, oiliness_score, hydration_score, texture_score, concerns_detected (array), redness_areas (array), pore_visibility (low|moderate|high), confidence (0-1), looksmax_concerns (array of tags), looksmax_actions (array of concise actions and methods such as mewing drills, oil pulling, de-bloating protocol, scalp massage when relevant). Scores must be numbers between 0 and 1.'
+                    },
+                    {
+                        role: 'user',
+                        content: [
+                            { type: 'text', text: 'Evaluate the photos and return the JSON only.' },
+                            ...imageContent
+                        ]
+                    }
                 ]
-            }
-        ]
-    });
-    const raw = completion.choices[0]?.message?.content;
-    if (!raw)
-        return null;
-    const parsed = JSON.parse(raw);
-    return {
-        detected_tone: String(parsed.detected_tone || 'medium'),
-        detected_type: String(parsed.detected_type || 'combination').toLowerCase(),
-        oiliness_score: Number(clamp01(Number(parsed.oiliness_score))),
-        hydration_score: Number(clamp01(Number(parsed.hydration_score))),
-        texture_score: Number(clamp01(Number(parsed.texture_score))),
-        concerns_detected: Array.isArray(parsed.concerns_detected) ? parsed.concerns_detected.slice(0, 5).map((v) => String(v)) : [],
-        redness_areas: Array.isArray(parsed.redness_areas) ? parsed.redness_areas.slice(0, 5).map((v) => String(v)) : [],
-        pore_visibility: ['low', 'moderate', 'high'].includes(String(parsed.pore_visibility || '').toLowerCase())
-            ? String(parsed.pore_visibility).toLowerCase()
-            : 'moderate',
-        confidence: Number(clamp01(Number(parsed.confidence || 0.7))),
-        looksmax_concerns: Array.isArray(parsed.looksmax_concerns)
-            ? parsed.looksmax_concerns.slice(0, 8).map((v) => normalizeConcernTag(v)).filter(Boolean)
-            : [],
-        looksmax_actions: Array.isArray(parsed.looksmax_actions)
-            ? parsed.looksmax_actions.slice(0, 8).map((v) => String(v).trim()).filter(Boolean)
-            : [],
-    };
+            });
+            const raw = completion.choices[0]?.message?.content;
+            if (!raw)
+                continue;
+            const parsed = JSON.parse(raw);
+            return {
+                detected_tone: String(parsed.detected_tone || 'medium'),
+                detected_type: String(parsed.detected_type || 'combination').toLowerCase(),
+                oiliness_score: Number(clamp01(Number(parsed.oiliness_score))),
+                hydration_score: Number(clamp01(Number(parsed.hydration_score))),
+                texture_score: Number(clamp01(Number(parsed.texture_score))),
+                concerns_detected: Array.isArray(parsed.concerns_detected) ? parsed.concerns_detected.slice(0, 7).map((v) => String(v)) : [],
+                redness_areas: Array.isArray(parsed.redness_areas) ? parsed.redness_areas.slice(0, 5).map((v) => String(v)) : [],
+                pore_visibility: ['low', 'moderate', 'high'].includes(String(parsed.pore_visibility || '').toLowerCase())
+                    ? String(parsed.pore_visibility).toLowerCase()
+                    : 'moderate',
+                confidence: Number(clamp01(Number(parsed.confidence || 0.7))),
+                looksmax_concerns: Array.isArray(parsed.looksmax_concerns)
+                    ? parsed.looksmax_concerns.slice(0, 10).map((v) => normalizeConcernTag(v)).filter(Boolean)
+                    : [],
+                looksmax_actions: Array.isArray(parsed.looksmax_actions)
+                    ? parsed.looksmax_actions.slice(0, 10).map((v) => String(v).trim()).filter(Boolean)
+                    : [],
+            };
+        }
+        catch (error) {
+            console.log(`⚠️ Vision inference failed on model ${visionModel}:`, error?.message);
+        }
+    }
+    return null;
 }
 async function analyzeImages(photos) {
     const refs = [photos.front, photos.left, photos.right, photos.scalp].filter(Boolean);

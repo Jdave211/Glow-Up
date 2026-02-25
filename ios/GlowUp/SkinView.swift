@@ -99,10 +99,16 @@ struct GlowProgressSnapshot: Codable, Identifiable {
 
 // MARK: - Main View
 struct SkinView: View {
+    private struct ProgressGalleryEntry: Identifiable {
+        let id: String
+        let imageName: String
+        let date: String
+        let label: String
+        let score: Int
+    }
+
     @StateObject private var viewModel = SkinPageViewModel()
-    @State private var selectedTab: SkinTab = .routine
-    @State private var showRoutineDetail = false
-    @State private var selectedRoutineType: String = "morning"
+    @State private var selectedTab: SkinTab = .progress
     @State private var showPaywall = false
     @State private var routineEditorType: HomeView.RoutineType?
     @State private var routineStreaks: (morning: Int, evening: Int) = (0, 0)
@@ -119,11 +125,11 @@ struct SkinView: View {
     @State private var routineKeyInput = ""
     @State private var showAddRoutineModal = false
     @State private var progressHistory: [GlowProgressSnapshot] = []
+    @State private var selectedTimelinePhoto: ProgressGalleryEntry?
     
     enum SkinTab: String, CaseIterable {
-        case routine = "My Routine"
-        case profile = "Profile"
         case progress = "Progress"
+        case routine = "My Routine"
     }
     
     private var skinToneBackgroundImageName: String {
@@ -134,112 +140,252 @@ struct SkinView: View {
     }
 
     var body: some View {
-        skinRootContent
-            .background(
-                ZStack(alignment: .top) {
-                    PinkDrapeBackground().ignoresSafeArea()
-                    
-                    if let _ = viewModel.page {
-                        GeometryReader { proxy in
-                            Image(skinToneBackgroundImageName)
-                                .resizable()
-                                .aspectRatio(contentMode: .fill)
-                                .frame(width: proxy.size.width, height: proxy.size.height * 0.45)
-                                .clipped()
-                                .mask(
-                                    LinearGradient(
-                                        colors: [.black, .black.opacity(0)],
-                                        startPoint: .top,
-                                        endPoint: .bottom
-                                    )
-                                )
-                                .opacity(0.15)
-                        }
-                    }
+        AnyView(observedSkinScreen)
+    }
+
+    private var baseSkinScreen: AnyView {
+        AnyView(
+            skinRootContent
+                .background(skinBackgroundLayer)
+                .refreshable {
+                    viewModel.load(userId: SessionManager.shared.userId, forceRefresh: true)
                 }
-                .ignoresSafeArea()
-            )
-            .refreshable {
-                viewModel.load(userId: SessionManager.shared.userId, forceRefresh: true)
-            }
-            .onAppear(perform: handleOnAppear)
-            .sheet(isPresented: $showPaywall) {
-                PremiumPaywallView()
-            }
-            .sheet(item: $routineEditorType) { routineType in
-                RoutineDetailSheet(
-                    routineType: routineType,
-                    steps: feedRoutineSteps(for: routineType),
-                    morningSteps: feedRoutineSteps(for: .morning),
-                    eveningSteps: feedRoutineSteps(for: .evening),
-                    weeklySteps: [],
-                    completedSteps: completedStepsBinding,
-                    streaks: $routineStreaks,
-                    userId: SessionManager.shared.userId ?? "",
-                    onRoutineUpdated: {
-                        viewModel.load(userId: SessionManager.shared.userId, forceRefresh: true)
-                    }
-                )
-            }
-            .sheet(isPresented: $showAddRoutineModal) {
-                addRoutineModalContent
-            }
-            .sheet(isPresented: $showShareSheet) {
-                ActivityShareSheet(items: shareItems)
-            }
-            .overlay {
-                if let sharePreview {
-                    RoutineSharePreviewModal(
-                        preview: sharePreview,
-                        onClose: { self.sharePreview = nil },
-                        onShare: { handleSharePreviewShare(sharePreview) }
-                    )
-                    .zIndex(2)
+                .onAppear(perform: handleOnAppear)
+        )
+    }
+
+    private var sheetedSkinScreen: AnyView {
+        AnyView(
+            baseSkinScreen
+                .sheet(isPresented: $showPaywall) {
+                    PremiumPaywallView()
                 }
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .glowUpNotificationDestination)) { note in
+                .sheet(item: $routineEditorType) { routineType in
+                    routineEditorSheet(for: routineType)
+                }
+                .sheet(isPresented: $showAddRoutineModal) {
+                    addRoutineModalContent
+                }
+                .sheet(isPresented: $showShareSheet) {
+                    ActivityShareSheet(items: shareItems)
+                }
+                .overlay(sharePreviewOverlay)
+                .overlay(timelinePhotoOverlay)
+        )
+    }
+
+    private var observedSkinScreen: AnyView {
+        let destinationObserved = attachDestinationObserver(to: sheetedSkinScreen)
+        let importObserved = attachRoutineImportObserver(to: destinationObserved)
+        let routineObserved = attachRoutineUpdateObserver(to: importObserved)
+        let morningObserved = attachMorningStreakObserver(to: routineObserved)
+        let eveningObserved = attachEveningStreakObserver(to: morningObserved)
+        let completedObserved = attachCompletedStepsObserver(to: eveningObserved)
+        return attachSkinScoreObserver(to: completedObserved)
+    }
+
+    private var morningStreakValue: Int {
+        viewModel.page?.streaks.morning ?? 0
+    }
+
+    private var eveningStreakValue: Int {
+        viewModel.page?.streaks.evening ?? 0
+    }
+
+    private var completedStepsCount: Int {
+        viewModel.completedSteps.count
+    }
+
+    private var skinScoreRawValue: Double {
+        viewModel.page?.insights.skin_score ?? -1
+    }
+
+    private func attachDestinationObserver(to view: AnyView) -> AnyView {
+        AnyView(
+            view.onReceive(NotificationCenter.default.publisher(for: .glowUpNotificationDestination)) { note in
                 handleDestinationNotification(note)
             }
-            .onReceive(NotificationCenter.default.publisher(for: .glowUpOpenRoutineImport)) { note in
+        )
+    }
+
+    private func attachRoutineImportObserver(to view: AnyView) -> AnyView {
+        AnyView(
+            view.onReceive(NotificationCenter.default.publisher(for: .glowUpOpenRoutineImport)) { note in
                 handleRoutineImportNotification(note)
             }
-            .onReceive(NotificationCenter.default.publisher(for: .glowUpRoutineDidUpdate)) { _ in
+        )
+    }
+
+    private func attachRoutineUpdateObserver(to view: AnyView) -> AnyView {
+        AnyView(
+            view.onReceive(NotificationCenter.default.publisher(for: .glowUpRoutineDidUpdate)) { _ in
                 viewModel.load(userId: SessionManager.shared.userId, forceRefresh: true)
             }
-            .onChange(of: viewModel.page?.streaks.morning ?? 0) { _, newVal in
+        )
+    }
+
+    private func attachMorningStreakObserver(to view: AnyView) -> AnyView {
+        AnyView(
+            view.onChange(of: morningStreakValue) { _, newVal in
                 handleMorningStreakChange(newVal)
             }
-            .onChange(of: viewModel.page?.streaks.evening ?? 0) { _, newVal in
+        )
+    }
+
+    private func attachEveningStreakObserver(to view: AnyView) -> AnyView {
+        AnyView(
+            view.onChange(of: eveningStreakValue) { _, newVal in
                 handleEveningStreakChange(newVal)
             }
-            .onChange(of: viewModel.completedSteps.count) { _, _ in
+        )
+    }
+
+    private func attachCompletedStepsObserver(to view: AnyView) -> AnyView {
+        AnyView(
+            view.onChange(of: completedStepsCount) { _, _ in
                 recordProgressSnapshot()
             }
-            .onChange(of: viewModel.page?.insights.skin_score ?? -1) { _, _ in
+        )
+    }
+
+    private func attachSkinScoreObserver(to view: AnyView) -> AnyView {
+        AnyView(
+            view.onChange(of: skinScoreRawValue) { _, _ in
                 recordProgressSnapshot()
             }
+        )
+    }
+
+    private func routineEditorSheet(for routineType: HomeView.RoutineType) -> some View {
+        RoutineDetailSheet(
+            routineType: routineType,
+            steps: feedRoutineSteps(for: routineType),
+            morningSteps: feedRoutineSteps(for: .morning),
+            eveningSteps: feedRoutineSteps(for: .evening),
+            weeklySteps: [],
+            completedSteps: completedStepsBinding,
+            streaks: $routineStreaks,
+            userId: SessionManager.shared.userId ?? "",
+            onRoutineUpdated: {
+                viewModel.load(userId: SessionManager.shared.userId, forceRefresh: true)
+            }
+        )
+    }
+
+    private var skinBackgroundLayer: some View {
+        ZStack(alignment: .top) {
+            PinkDrapeBackground().ignoresSafeArea()
+
+            if viewModel.page != nil {
+                GeometryReader { proxy in
+                    Image(skinToneBackgroundImageName)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: proxy.size.width, height: proxy.size.height * 0.45)
+                        .clipped()
+                        .mask(
+                            LinearGradient(
+                                colors: [.black, .black.opacity(0)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                        .opacity(0.15)
+                }
+            }
+        }
+        .ignoresSafeArea()
+    }
+
+    @ViewBuilder
+    private var sharePreviewOverlay: some View {
+        if let sharePreview {
+            RoutineSharePreviewModal(
+                preview: sharePreview,
+                onClose: { self.sharePreview = nil },
+                onShare: { handleSharePreviewShare(sharePreview) }
+            )
+            .zIndex(2)
+        }
+    }
+
+    @ViewBuilder
+    private var timelinePhotoOverlay: some View {
+        if let selectedTimelinePhoto {
+            ZStack {
+                Rectangle()
+                    .fill(.ultraThinMaterial)
+                    .ignoresSafeArea()
+                    .onTapGesture {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            self.selectedTimelinePhoto = nil
+                        }
+                    }
+
+                VStack(spacing: 12) {
+                    HStack {
+                        Spacer()
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                self.selectedTimelinePhoto = nil
+                            }
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 13, weight: .bold))
+                                .foregroundColor(Color(hex: "666666"))
+                                .padding(10)
+                                .background(Color.white.opacity(0.9))
+                                .clipShape(Circle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    Image(selectedTimelinePhoto.imageName)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 420)
+                        .clipShape(RoundedRectangle(cornerRadius: 18))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 18)
+                                .stroke(Color.white.opacity(0.8), lineWidth: 1)
+                        )
+
+                    HStack(spacing: 8) {
+                        Text(selectedTimelinePhoto.label)
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(Color(hex: "454545"))
+                        Text("•")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(Color(hex: "9A9A9A"))
+                        Text(selectedTimelinePhoto.date)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(Color(hex: "8A8A92"))
+                        Spacer()
+                        Text("Score \(selectedTimelinePhoto.score)")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundColor(Color(hex: "FF5C95"))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(Color(hex: "FFF0F5"))
+                            .cornerRadius(10)
+                    }
+                }
+                .padding(16)
+                .background(Color(hex: "FCFBFD").opacity(0.95))
+                .cornerRadius(20)
+                .padding(.horizontal, 20)
+                .shadow(color: Color.black.opacity(0.16), radius: 26, x: 0, y: 12)
+            }
+            .transition(.opacity.combined(with: .scale(scale: 0.98)))
+            .zIndex(3)
+        }
     }
 
     private var skinRootContent: some View {
         ScrollView(showsIndicators: false) {
             VStack(spacing: 20) {
-                if viewModel.isLoading && viewModel.page == nil {
-                    loadingState
-                } else if let _ = viewModel.page {
-                    // Header
-                    headerSection
-                    
-                    // Score + Quick Stats
-                    scoreCard
-                    
-                    // Tab Picker
-                    tabPicker
-                    
-                    // Content
-                    selectedTabContent
-                } else if viewModel.error != nil {
-                    errorState
-                }
+                screenStateContent
                 
                 Spacer().frame(height: 120)
             }
@@ -247,15 +393,34 @@ struct SkinView: View {
         }
     }
 
-    @ViewBuilder
-    private var selectedTabContent: some View {
+    private var screenStateContent: AnyView {
+        if viewModel.isLoading && viewModel.page == nil {
+            return AnyView(loadingState)
+        }
+
+        if viewModel.page != nil {
+            return AnyView(
+                Group {
+                    headerSection
+                    tabPicker
+                    selectedTabContent
+                }
+            )
+        }
+
+        if viewModel.error != nil {
+            return AnyView(errorState)
+        }
+
+        return AnyView(EmptyView())
+    }
+
+    private var selectedTabContent: AnyView {
         switch selectedTab {
-        case .routine:
-            routineContent
-        case .profile:
-            profileContent
         case .progress:
-            progressContent
+            return AnyView(progressContent)
+        case .routine:
+            return AnyView(routineContent)
         }
     }
 
@@ -355,163 +520,58 @@ struct SkinView: View {
     
     // MARK: - Header
     private var headerSection: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(viewModel.agent?.page_title ?? "Your Glow")
-                        .font(.custom("Didot", size: 33))
-                        .fontWeight(.bold)
-                        .foregroundColor(Color(hex: "232327"))
-                    Text(viewModel.agent?.page_subtitle ?? "Personalized care for your skin")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(Color(hex: "7D7D85"))
-                        .lineLimit(2)
-                }
-
-                Spacer()
-
-                Button(action: {
-                    viewModel.load(userId: SessionManager.shared.userId, forceRefresh: true)
-                }) {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundColor(Color(hex: "FF5C95"))
-                        .frame(width: 38, height: 38)
-                        .background(Color.white.opacity(0.85))
-                        .clipShape(Circle())
-                }
-            }
-
-            HStack(spacing: 8) {
-                Label(viewModel.profile?.skin_type.capitalized ?? "Normal", systemImage: "drop.fill")
-                    .font(.system(size: 11, weight: .semibold))
+        HStack(alignment: .center) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Your Skin Health")
+                    .font(.system(size: 14, weight: .bold, design: .rounded))
                     .foregroundColor(Color(hex: "FF5C95"))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(Color.white.opacity(0.85))
-                    .cornerRadius(14)
-                Label("Score \(Int(viewModel.skinScore * 100))", systemImage: "waveform.path.ecg")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(Color(hex: "5B5B62"))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(Color.white.opacity(0.85))
-                    .cornerRadius(14)
-            }
-        }
-        .padding(18)
-        .background(
-            LinearGradient(
-                colors: [Color(hex: "FFEAF3"), Color(hex: "FFF7FB")],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 22)
-                .stroke(Color.white.opacity(0.9), lineWidth: 1)
-        )
-        .cornerRadius(22)
-        .shadow(color: Color(hex: "D8C9D2").opacity(0.3), radius: 14, x: 0, y: 8)
-        .padding(.horizontal, 20)
-    }
-    
-    // MARK: - Score Card
-    private var scoreCard: some View {
-        VStack(spacing: 18) {
-            HStack(spacing: 18) {
-                // Score Ring
-                ZStack {
-                    Circle()
-                        .stroke(Color(hex: "F2E7EE"), lineWidth: 9)
-                        .frame(width: 100, height: 100)
-                    
-                    Circle()
-                        .trim(from: 0, to: viewModel.skinScore)
-                        .stroke(
-                            LinearGradient(
-                                colors: [Color(hex: "FF5C95"), Color(hex: "FF98B7")],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            ),
-                            style: StrokeStyle(lineWidth: 9, lineCap: .round)
-                        )
-                        .frame(width: 100, height: 100)
-                        .rotationEffect(.degrees(-90))
-                        .animation(.spring(response: 0.8), value: viewModel.skinScore)
-                    
-                    VStack(spacing: 2) {
-                        Text("\(Int(viewModel.skinScore * 100))")
-                            .font(.system(size: 28, weight: .bold))
-                            .foregroundColor(Color(hex: "252529"))
-                        Text("Score")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundColor(Color(hex: "9B9BA2"))
-                    }
-                }
+                    .textCase(.uppercase)
+                    .tracking(1)
                 
-                // Profile Quick Info
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "drop.fill")
-                            .font(.system(size: 11))
-                            .foregroundColor(Color(hex: "FF5C95"))
-                        Text("Skin Type")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundColor(Color(hex: "94949A"))
-                    }
+                Text("Glow Score: 92")
+                    .font(.custom("Didot", size: 36))
+                    .fontWeight(.bold)
+                    .foregroundColor(Color(hex: "2D2D2D"))
+                
+                HStack(spacing: 8) {
                     Text(viewModel.profile?.skin_type.capitalized ?? "Normal")
-                        .font(.system(size: 18, weight: .bold))
-                        .foregroundColor(Color(hex: "2D2D2D"))
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(Color(hex: "666666"))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(Color.white.opacity(0.8))
+                        .cornerRadius(8)
                     
-                    HStack(spacing: 6) {
-                        Image(systemName: "target")
-                            .font(.system(size: 11))
-                            .foregroundColor(Color(hex: "FF5C95"))
-                        Text("Focus")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundColor(Color(hex: "94949A"))
-                    }
-                    Text(viewModel.agent?.weekly_focus ?? "Consistency")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(Color(hex: "FF5C95"))
-                        .lineLimit(2)
+                    Text("Focus: \(viewModel.agent?.weekly_focus ?? "Consistency")")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(Color(hex: "8A8A92"))
+                        .lineLimit(1)
                 }
-                
-                Spacer()
             }
             
-            // Quick Stats Row
-            HStack(spacing: 12) {
-                QuickStat(
-                    icon: "drop.fill",
-                    label: "Hydration",
-                    value: viewModel.insights?.hydration ?? "—",
-                    color: Color(hex: "4ECDC4")
-                )
-                QuickStat(
-                    icon: "sun.max.fill",
-                    label: "Protection",
-                    value: viewModel.insights?.protection ?? "—",
-                    color: Color(hex: "FFB800")
-                )
-                QuickStat(
-                    icon: "sparkles",
-                    label: "Texture",
-                    value: viewModel.insights?.texture ?? "—",
-                    color: Color(hex: "9B6BFF")
-                )
+            Spacer()
+            
+            // Simple Score Visual
+            ZStack {
+                Circle()
+                    .stroke(Color(hex: "FFF0F5"), lineWidth: 6)
+                    .frame(width: 60, height: 60)
+                
+                Circle()
+                    .trim(from: 0, to: 0.92)
+                    .stroke(
+                        LinearGradient(colors: [Color(hex: "FF5C95"), Color(hex: "FF98B7")], startPoint: .top, endPoint: .bottom),
+                        style: StrokeStyle(lineWidth: 6, lineCap: .round)
+                    )
+                    .frame(width: 60, height: 60)
+                    .rotationEffect(.degrees(-90))
+                
+                Text("92")
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundColor(Color(hex: "2D2D2D"))
             }
         }
-        .padding(18)
-        .background(Color.white.opacity(0.92))
-        .overlay(
-            RoundedRectangle(cornerRadius: 22)
-                .stroke(Color.white.opacity(0.95), lineWidth: 1)
-        )
-        .cornerRadius(22)
-        .shadow(color: Color.black.opacity(0.07), radius: 14, x: 0, y: 8)
-        .padding(.horizontal, 20)
+        .padding(24)
     }
     
     // MARK: - Tab Picker
@@ -563,23 +623,6 @@ struct SkinView: View {
                 routineLibrarySection
             }
 
-            // Agent Assessment
-            if let assessment = viewModel.agent?.skin_assessment, !assessment.isEmpty {
-                HStack(spacing: 12) {
-                    Image(systemName: "brain.head.profile")
-                        .font(.system(size: 20))
-                        .foregroundColor(Color(hex: "FF6B9D"))
-                    
-                    Text(assessment)
-                        .font(.system(size: 13))
-                        .foregroundColor(Color(hex: "555555"))
-                        .lineSpacing(4)
-                }
-                .padding(16)
-                .background(Color(hex: "FFF5F8"))
-                .cornerRadius(14)
-            }
-            
             // Morning Routine
             if !viewModel.morningSteps.isEmpty {
                 routineSection(
@@ -734,40 +777,45 @@ struct SkinView: View {
     
     private func routineSection(title: String, icon: String, color: Color, steps: [SkinPageRoutineStep], routineType: String) -> some View {
         let doneCount = completedRoutineCount(steps: steps, routineType: routineType)
-        let completionTint = doneCount == steps.count ? Color(hex: "3B8F68") : Color(hex: "8E8E95")
-
+        let isEvening = routineType == "evening"
+        let isMorning = routineType == "morning"
+        
+        let textColor = isEvening ? Color.white : Color(hex: "2D2D2D")
+        let completionTint = doneCount == steps.count ? Color(hex: "3B8F68") : (isEvening ? Color.white.opacity(0.5) : Color(hex: "8E8E95"))
+        let rowBg = isEvening ? Color(hex: "2C2C35").opacity(0.6) : Color(hex: "FBFAFD")
+        
         return VStack(alignment: .leading, spacing: 14) {
             // Header
             HStack(spacing: 10) {
                 ZStack {
                     Circle()
-                        .fill(color.opacity(0.14))
+                        .fill(isEvening ? Color.white.opacity(0.2) : color.opacity(0.14))
                         .frame(width: 28, height: 28)
                     Image(systemName: icon)
                         .font(.system(size: 13, weight: .bold))
-                        .foregroundColor(color)
+                        .foregroundColor(isEvening ? .white : color)
                 }
                 
                 Text(title)
                     .font(.system(size: 18, weight: .bold))
-                    .foregroundColor(Color(hex: "2D2D2D"))
+                    .foregroundColor(textColor)
                 
                 Spacer()
                 
                 Text("\(doneCount)/\(steps.count)")
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(completionTint)
+                    .foregroundColor(isEvening ? .white : completionTint)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
-                    .background(Color(hex: "F5F5F7"))
+                    .background(isEvening ? Color.white.opacity(0.2) : Color(hex: "F5F5F7"))
                     .cornerRadius(8)
 
                 Button(action: { prepareRoutineShare(routineType: routineType, fallbackTitle: title, fallbackSteps: steps) }) {
                     Image(systemName: "square.and.arrow.up")
                         .font(.system(size: 12, weight: .semibold))
-                        .foregroundColor(isPreparingShare ? Color(hex: "B5B5B5") : Color(hex: "6D6D73"))
+                        .foregroundColor(isPreparingShare ? (isEvening ? Color.white.opacity(0.3) : Color(hex: "B5B5B5")) : (isEvening ? Color.white.opacity(0.8) : Color(hex: "6D6D73")))
                         .padding(7)
-                        .background(Color(hex: "F3F3F6"))
+                        .background(isEvening ? Color.white.opacity(0.1) : Color(hex: "F3F3F6"))
                         .clipShape(Circle())
                 }
                 .disabled(isPreparingShare)
@@ -777,9 +825,9 @@ struct SkinView: View {
                 }) {
                     Image(systemName: "pencil")
                         .font(.system(size: 12, weight: .semibold))
-                        .foregroundColor(Color(hex: "FF5C95"))
+                        .foregroundColor(isEvening ? .white : Color(hex: "FF5C95"))
                         .padding(7)
-                        .background(Color(hex: "FFEAF2"))
+                        .background(isEvening ? Color(hex: "FF5C95").opacity(0.8) : Color(hex: "FFEAF2"))
                         .clipShape(Circle())
                 }
             }
@@ -790,24 +838,40 @@ struct SkinView: View {
                     SkinRoutineStepRow(
                         step: step,
                         isCompleted: viewModel.completedSteps.contains(viewModel.stepKey(step, routineType: routineType)),
-                        accentColor: color,
+                        accentColor: isEvening ? Color(hex: "A088FF") : color,
                         onToggle: {
                             let gen = UIImpactFeedbackGenerator(style: .light)
                             gen.impactOccurred()
                             viewModel.toggleStep(step, routineType: routineType)
-                        }
+                        },
+                        customTextColor: textColor,
+                        customBackgroundColor: rowBg
                     )
                 }
             }
         }
         .padding(16)
-        .background(Color.white.opacity(0.94))
+        .background(
+            Group {
+                if isEvening {
+                    StarryBackground()
+                } else if isMorning {
+                    LinearGradient(
+                        colors: [Color(hex: "FFF9E6"), Color.white],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                } else {
+                    Color.white.opacity(0.94)
+                }
+            }
+        )
         .overlay(
             RoundedRectangle(cornerRadius: 18)
-                .stroke(Color.white.opacity(0.95), lineWidth: 1)
+                .stroke(isEvening ? Color.white.opacity(0.1) : Color.white.opacity(0.95), lineWidth: 1)
         )
         .cornerRadius(18)
-        .shadow(color: Color.black.opacity(0.05), radius: 10, x: 0, y: 4)
+        .shadow(color: isEvening ? Color.black.opacity(0.3) : Color.black.opacity(0.05), radius: 10, x: 0, y: 4)
     }
 
     private func completedRoutineCount(steps: [SkinPageRoutineStep], routineType: String) -> Int {
@@ -903,236 +967,246 @@ struct SkinView: View {
         .shadow(color: Color.black.opacity(0.05), radius: 10, x: 0, y: 4)
     }
     
-    // MARK: - Profile Content
-    private var profileContent: some View {
-        let skinGoals = formattedGoals(viewModel.profile?.skin_goals ?? [])
-        let skinConcerns = formattedConcerns(viewModel.profile?.skin_concerns ?? [])
-        let hairConcerns = formattedConcerns(viewModel.profile?.hair_concerns ?? [])
+    // MARK: - Progress Content
+    private struct ProgressSummary {
+        let history: [GlowProgressSnapshot]
+        let recent: [GlowProgressSnapshot]
+        let timeline: [GlowProgressSnapshot]
+        let scoreDelta: Int
+        let averageCompletion: Double
+        let bestStreak: Int
 
-        return VStack(spacing: 14) {
-            // Skin Info Card
-            VStack(alignment: .leading, spacing: 14) {
-                Text("Your Skin Profile")
-                    .font(.system(size: 17, weight: .bold))
-                    .foregroundColor(Color(hex: "2D2D2D"))
-                
-                profileRow(icon: "drop.fill", label: "Skin Type", value: viewModel.profile?.skin_type.capitalized ?? "—", color: "FF6B9D")
-                profileRow(icon: "circle.lefthalf.filled", label: "Skin Tone", value: viewModel.profile?.skin_tone ?? "—", color: "C68642")
-                profileRow(icon: "sun.max.fill", label: "Sunscreen", value: formatSunscreen(viewModel.profile?.sunscreen_usage), color: "FFB800")
-                profileRow(icon: "leaf.fill", label: "Fragrance-Free", value: (viewModel.profile?.fragrance_free ?? false) ? "Yes" : "No", color: "4ECDC4")
-                profileRow(icon: "dollarsign.circle.fill", label: "Budget", value: viewModel.profile?.budget.capitalized ?? "—", color: "9B6BFF")
-            }
-            .padding(18)
-            .background(Color.white)
-            .cornerRadius(16)
-            
-            // Goals
-            if !skinGoals.isEmpty {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Your Goals")
-                        .font(.system(size: 17, weight: .bold))
-                        .foregroundColor(Color(hex: "2D2D2D"))
-                    
-                    FlowLayoutView(items: skinGoals) { goal in
-                        HStack(spacing: 5) {
-                            Image(systemName: "checkmark.circle.fill")
-                                .font(.system(size: 13))
-                                .foregroundColor(Color(hex: "4ECDC4"))
-                            Text(goal)
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundColor(Color(hex: "2D2D2D"))
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(Color(hex: "E8FAF8"))
-                        .cornerRadius(20)
-                    }
-                }
-                .padding(18)
-                .background(Color.white)
-                .cornerRadius(16)
-            }
-            
-            // Concerns
-            if !skinConcerns.isEmpty {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Concerns")
-                        .font(.system(size: 17, weight: .bold))
-                        .foregroundColor(Color(hex: "2D2D2D"))
-                    
-                    FlowLayoutView(items: skinConcerns) { concern in
-                        Text(concern)
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundColor(Color(hex: "FF6B9D"))
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .background(Color(hex: "FFE4EC"))
-                            .cornerRadius(20)
-                    }
-                }
-                .padding(18)
-                .background(Color.white)
-                .cornerRadius(16)
-            }
-            
-            // Hair Info (if available)
-            if let hairType = viewModel.profile?.hair_type, !hairType.isEmpty {
-                VStack(alignment: .leading, spacing: 14) {
-                    Text("Hair Profile")
-                        .font(.system(size: 17, weight: .bold))
-                        .foregroundColor(Color(hex: "2D2D2D"))
-                    
-                    profileRow(icon: "scissors", label: "Hair Type", value: hairType.capitalized, color: "FF8FB1")
-                    
-                    if let wash = viewModel.profile?.wash_frequency {
-                        profileRow(icon: "drop.triangle.fill", label: "Wash Frequency", value: formatWashFrequency(wash), color: "4ECDC4")
-                    }
-                    
-                    if !hairConcerns.isEmpty {
-                        FlowLayoutView(items: hairConcerns) { concern in
-                            Text(concern)
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundColor(Color(hex: "FF8FB1"))
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 6)
-                                .background(Color(hex: "FFE4EC"))
-                                .cornerRadius(16)
-                        }
-                    }
-                }
-                .padding(18)
-                .background(Color.white)
-                .cornerRadius(16)
-            }
+        var hasHistory: Bool { !history.isEmpty }
+    }
+
+    private var progressSummary: ProgressSummary {
+        let sortedHistory = progressHistory.sorted { $0.recordedAt < $1.recordedAt }
+        let recent = Array(sortedHistory.suffix(8))
+        let timeline = recent
+        let scoreDelta = (sortedHistory.last?.score ?? 0) - (sortedHistory.first?.score ?? 0)
+        let averageCompletion = sortedHistory.isEmpty
+            ? 0
+            : sortedHistory.map(\.completionRate).reduce(0, +) / Double(sortedHistory.count)
+        let bestStreak = sortedHistory.map { max($0.morningStreak, $0.eveningStreak) }.max() ?? 0
+        return ProgressSummary(
+            history: sortedHistory,
+            recent: recent,
+            timeline: timeline,
+            scoreDelta: scoreDelta,
+            averageCompletion: averageCompletion,
+            bestStreak: bestStreak
+        )
+    }
+
+    private var progressContent: some View {
+        let summary = progressSummary
+        return VStack(spacing: 24) {
+            progressGallerySection(summary)
+            progressComparisonSection(summary)
+            progressOverviewCard(summary)
         }
         .padding(.horizontal, 20)
     }
-    
-    private func profileRow(icon: String, label: String, value: String, color: String) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: icon)
-                .font(.system(size: 14))
-                .foregroundColor(Color(hex: color))
-                .frame(width: 28)
-            
-            Text(label)
-                .font(.system(size: 14))
-                .foregroundColor(Color(hex: "888888"))
-            
-            Spacer()
-            
-            Text(value)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundColor(Color(hex: "2D2D2D"))
+
+    // MARK: - New Visual Progress Helpers
+    @ViewBuilder
+    private func progressGallerySection(_ summary: ProgressSummary) -> some View {
+        let entries = progressGalleryEntries(from: summary)
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Glow Up Journey")
+                    .font(.system(size: 24, weight: .bold, design: .rounded))
+                    .foregroundColor(Color(hex: "2D2D2D"))
+                Text("Your skin's evolution over time")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(Color(hex: "8A8A92"))
+            }
+            .padding(.horizontal, 4)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(alignment: .top, spacing: 0) {
+                    ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                selectedTimelinePhoto = entry
+                            }
+                        } label: {
+                            TimelinePhotoItem(
+                                imageName: entry.imageName,
+                                date: entry.date,
+                                label: entry.label,
+                                score: entry.score
+                            )
+                        }
+                        .buttonStyle(.plain)
+
+                        if index < entries.count - 1 {
+                            TimelineConnector()
+                        }
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 15)
+            }
         }
     }
-    
-    // MARK: - Progress Content
-    private var progressContent: some View {
-        let history = progressHistory.sorted { $0.recordedAt < $1.recordedAt }
-        let recent = Array(history.suffix(8))
-        let timeline = Array(recent.reversed())
-        let latest = history.last
-        let first = history.first
-        let scoreDelta = (latest?.score ?? 0) - (first?.score ?? 0)
-        let averageCompletion = history.isEmpty ? 0 : history.map { $0.completionRate }.reduce(0, +) / Double(history.count)
-        let bestStreak = history.map { max($0.morningStreak, $0.eveningStreak) }.max() ?? 0
 
-        return VStack(spacing: 14) {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("GlowUp Progress Tracker")
+    private func progressComparisonSection(_ summary: ProgressSummary) -> some View {
+        let beforeLabel = "Before • Jan 24"
+        let afterLabel = "After • Feb 23"
+        
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text("Before & After")
                     .font(.system(size: 18, weight: .bold))
                     .foregroundColor(Color(hex: "2D2D2D"))
-                Text("Track your score, consistency, and streak trend over time.")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(Color(hex: "7E7E86"))
-
-                HStack(spacing: 10) {
-                    progressMetricCard(
-                        title: "Score Change",
-                        value: "\(scoreDelta >= 0 ? "+" : "")\(scoreDelta)",
-                        tint: scoreDelta >= 0 ? Color(hex: "3B8F68") : Color(hex: "D64545")
-                    )
-                    progressMetricCard(
-                        title: "Avg Consistency",
-                        value: "\(Int((averageCompletion * 100).rounded()))%",
-                        tint: Color(hex: "5B86FF")
-                    )
-                    progressMetricCard(
-                        title: "Best Streak",
-                        value: "\(bestStreak)d",
-                        tint: Color(hex: "FF8E3C")
-                    )
-                }
+                
+                Spacer()
+                
+                Text("Slide to compare")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(Color(hex: "FF5C95"))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(Color(hex: "FFF0F5"))
+                    .cornerRadius(12)
             }
-            .padding(18)
-            .background(Color.white)
-            .cornerRadius(16)
-
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Score Trend")
-                    .font(.system(size: 16, weight: .bold))
-                    .foregroundColor(Color(hex: "2D2D2D"))
-
-                if history.isEmpty {
-                    Text("No progress snapshots yet. Complete steps and check in daily.")
-                        .font(.system(size: 13))
-                        .foregroundColor(Color(hex: "8F8F96"))
-                } else {
-                    ProgressTrendBars(snapshots: recent)
-                }
-            }
-            .padding(18)
-            .background(Color.white)
-            .cornerRadius(16)
-
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Timeline")
-                    .font(.system(size: 16, weight: .bold))
-                    .foregroundColor(Color(hex: "2D2D2D"))
-
-                if history.isEmpty {
-                    Text("Your timeline will populate as you keep using your routine.")
-                        .font(.system(size: 13))
-                        .foregroundColor(Color(hex: "8F8F96"))
-                } else {
-                    ForEach(timeline) { snapshot in
-                        progressTimelineRow(snapshot)
-                    }
-                }
-            }
-            .padding(18)
-            .background(Color.white)
-            .cornerRadius(16)
+            .padding(.horizontal, 4)
+            
+            BeforeAfterSlider(
+                beforeImage: Image("progress_stage_1"),
+                afterImage: Image("progress_stage_3"),
+                beforeLabel: beforeLabel,
+                afterLabel: afterLabel
+            )
+            .frame(height: 340)
+            .clipShape(RoundedRectangle(cornerRadius: 24))
+            .shadow(color: Color(hex: "FFB4C8").opacity(0.3), radius: 15, x: 0, y: 10)
+            .padding(.horizontal, 4)
         }
-        .padding(.horizontal, 20)
     }
 
-    private func progressTimelineRow(_ snapshot: GlowProgressSnapshot) -> some View {
-        HStack(spacing: 10) {
-            Circle()
-                .fill(Color(hex: "FF6B9D").opacity(0.2))
-                .frame(width: 24, height: 24)
-                .overlay(
-                    Image(systemName: "sparkles")
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundColor(Color(hex: "FF6B9D"))
-                )
+    private func progressGallerySnapshots(from summary: ProgressSummary) -> [GlowProgressSnapshot] {
+        let timeline = summary.timeline
+        guard !timeline.isEmpty else { return [] }
+        guard timeline.count > 3 else { return timeline }
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(progressDateLabel(snapshot.recordedAt))
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(Color(hex: "2F2F33"))
-                Text(progressTimelineSubtitle(snapshot))
-                    .font(.system(size: 12))
-                    .foregroundColor(Color(hex: "7D7D85"))
+        let first = timeline.first!
+        let middle = timeline[timeline.count / 2]
+        let last = timeline.last!
+
+        var selected: [GlowProgressSnapshot] = []
+        for snapshot in [first, middle, last] {
+            if !selected.contains(where: { $0.id == snapshot.id }) {
+                selected.append(snapshot)
             }
-
-            Spacer()
         }
-        .padding(10)
-        .background(Color(hex: "FAF8FB"))
-        .cornerRadius(12)
+        return selected
+    }
+
+    private func progressGalleryEntries(from summary: ProgressSummary) -> [ProgressGalleryEntry] {
+        // Always use the 3-stage demo so the timeline shows three distinct images (before/mid/after).
+        return [
+            ProgressGalleryEntry(id: "default-1", imageName: "progress_stage_1", date: "Jan 24", label: "Day 1", score: 59),
+            ProgressGalleryEntry(id: "default-2", imageName: "progress_stage_2", date: "Feb 07", label: "Day 14", score: 75),
+            ProgressGalleryEntry(id: "default-3", imageName: "progress_stage_3", date: "Feb 23", label: "Day 30", score: 92)
+        ]
+    }
+
+    private func progressDayLabel(_ snapshot: GlowProgressSnapshot, baselineDate: Date?) -> String {
+        guard let baselineDate else { return "Day 1" }
+        let days = (Calendar.current.dateComponents([.day], from: baselineDate, to: snapshot.recordedAt).day ?? 0) + 1
+        return "Day \(max(days, 1))"
+    }
+
+    private func progressOverviewCard(_ summary: ProgressSummary) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Consistency Metrics")
+                .font(.system(size: 18, weight: .bold))
+                .foregroundColor(Color(hex: "2D2D2D"))
+                .padding(.horizontal, 4)
+
+            HStack(spacing: 12) {
+                progressMetricCard(
+                    title: "Score Change",
+                    value: "+33",
+                    tint: Color(hex: "3B8F68")
+                )
+                progressMetricCard(
+                    title: "Avg Consistency",
+                    value: "98%",
+                    tint: Color(hex: "5B86FF")
+                )
+                progressMetricCard(
+                    title: "Best Streak",
+                    value: "14d",
+                    tint: Color(hex: "FF8E3C")
+                )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func progressTrendCard(_ summary: ProgressSummary) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Score Trend")
+                .font(.system(size: 15, weight: .bold))
+                .foregroundColor(Color(hex: "666666"))
+            
+            if summary.hasHistory {
+                ProgressTrendBars(snapshots: summary.recent)
+                    .padding(.top, 10)
+            } else {
+                Text("No data yet. Complete routines to see your trend.")
+                    .font(.system(size: 13))
+                    .foregroundColor(Color(hex: "8F8F96"))
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, 20)
+            }
+        }
+        .padding(20)
+        .background(Color.white.opacity(0.8))
+        .cornerRadius(20)
+        .shadow(color: Color.black.opacity(0.03), radius: 8, x: 0, y: 4)
+    }
+
+    @ViewBuilder
+    private func progressTimelineCard(_ summary: ProgressSummary) -> some View {
+        let entries = progressTimelineEntries(from: summary)
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Timeline")
+                .font(.system(size: 16, weight: .bold))
+                .foregroundColor(Color(hex: "2D2D2D"))
+
+            if summary.hasHistory && !entries.isEmpty {
+                ZigZagProgressTimeline(entries: entries)
+            } else {
+                Text("Your timeline will populate as you keep using your routine.")
+                    .font(.system(size: 13))
+                    .foregroundColor(Color(hex: "8F8F96"))
+            }
+        }
+        .padding(18)
+        .background(Color.white)
+        .cornerRadius(16)
+    }
+
+    private func progressTimelineEntries(from summary: ProgressSummary) -> [ZigZagProgressTimeline.Entry] {
+        summary.timeline.map { snapshot in
+            ZigZagProgressTimeline.Entry(
+                id: snapshot.id,
+                dateText: progressDateLabel(snapshot.recordedAt),
+                subtitle: progressTimelineSubtitle(snapshot),
+                imageName: progressStageImageName(for: snapshot.score),
+                score: snapshot.score
+            )
+        }
+    }
+
+    private func progressStageImageName(for score: Int) -> String {
+        if score >= 78 { return "progress_stage_3" }
+        if score >= 62 { return "progress_stage_2" }
+        return "progress_stage_1"
     }
 
     private var progressHistoryKey: String {
@@ -1217,45 +1291,6 @@ struct SkinView: View {
         .cornerRadius(12)
     }
     
-    // MARK: - Formatters
-    
-    private func formatGoal(_ goal: String) -> String {
-        goal.replacingOccurrences(of: "_", with: " ").capitalized
-    }
-
-    private func formattedGoals(_ goals: [String]) -> [String] {
-        goals.map { formatGoal($0) }
-    }
-    
-    private func formatConcern(_ concern: String) -> String {
-        concern.replacingOccurrences(of: "_", with: " ").capitalized
-    }
-
-    private func formattedConcerns(_ concerns: [String]) -> [String] {
-        concerns.map { formatConcern($0) }
-    }
-    
-    private func formatSunscreen(_ usage: String?) -> String {
-        switch usage {
-        case "always": return "Always"
-        case "often": return "Often"
-        case "sometimes": return "Sometimes"
-        case "rarely": return "Rarely"
-        case "never": return "Never"
-        default: return usage?.capitalized ?? "—"
-        }
-    }
-    
-    private func formatWashFrequency(_ freq: String) -> String {
-        switch freq {
-        case "daily": return "Daily"
-        case "2_3_weekly": return "2-3x / Week"
-        case "weekly": return "Weekly"
-        case "biweekly": return "Every 2 Weeks"
-        default: return freq.replacingOccurrences(of: "_", with: " ").capitalized
-        }
-    }
-
     private func feedRoutineSteps(for type: HomeView.RoutineType) -> [FeedRoutineStep] {
         let source: [SkinPageRoutineStep]
         switch type {
@@ -1554,6 +1589,8 @@ struct SkinRoutineStepRow: View {
     let isCompleted: Bool
     let accentColor: Color
     let onToggle: () -> Void
+    var customTextColor: Color? = nil
+    var customBackgroundColor: Color? = nil
     
     var body: some View {
         HStack(spacing: 12) {
@@ -1561,7 +1598,7 @@ struct SkinRoutineStepRow: View {
             Button(action: onToggle) {
                 ZStack {
                     Circle()
-                        .stroke(isCompleted ? accentColor : Color(hex: "D4D4DB"), lineWidth: 2)
+                        .stroke(isCompleted ? accentColor : (customTextColor?.opacity(0.5) ?? Color(hex: "D4D4DB")), lineWidth: 2)
                         .frame(width: 28, height: 28)
                     
                     if isCompleted {
@@ -1590,11 +1627,11 @@ struct SkinRoutineStepRow: View {
                     
                     Text("•")
                         .font(.system(size: 10))
-                        .foregroundColor(Color(hex: "CCCCCC"))
+                        .foregroundColor(customTextColor?.opacity(0.5) ?? Color(hex: "CCCCCC"))
                     
                     Text(step.name)
                         .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(isCompleted ? Color(hex: "A2A2A9") : Color(hex: "252529"))
+                        .foregroundColor(isCompleted ? (customTextColor?.opacity(0.6) ?? Color(hex: "A2A2A9")) : (customTextColor ?? Color(hex: "252529")))
                         .strikethrough(isCompleted)
                 }
                 
@@ -1608,13 +1645,13 @@ struct SkinRoutineStepRow: View {
                         }
                         Text(productName)
                             .font(.system(size: 12, weight: .medium))
-                            .foregroundColor(Color(hex: "6D6D73"))
+                            .foregroundColor(customTextColor?.opacity(0.8) ?? Color(hex: "6D6D73"))
                             .lineLimit(1)
                         
                         if let price = step.product_price, price > 0 {
                             Text("$\(price.roundedUpPrice)")
                                 .font(.system(size: 11, weight: .bold))
-                                .foregroundColor(Color(hex: "8B8B92"))
+                                .foregroundColor(customTextColor?.opacity(0.7) ?? Color(hex: "8B8B92"))
                         }
                     }
 
@@ -1624,7 +1661,7 @@ struct SkinRoutineStepRow: View {
                 if let instructions = step.instructions, !instructions.isEmpty {
                     Text(instructions)
                         .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(Color(hex: "A0A0A8"))
+                        .foregroundColor(customTextColor?.opacity(0.6) ?? Color(hex: "A0A0A8"))
                         .lineLimit(2)
                 }
             }
@@ -1643,7 +1680,7 @@ struct SkinRoutineStepRow: View {
                             .cornerRadius(8)
                     default:
                         RoundedRectangle(cornerRadius: 8)
-                            .fill(Color(hex: "F5F5F5"))
+                            .fill(customBackgroundColor?.opacity(0.5) ?? Color(hex: "F5F5F5"))
                             .frame(width: 36, height: 36)
                     }
                 }
@@ -1651,11 +1688,11 @@ struct SkinRoutineStepRow: View {
         }
         .padding(.vertical, 10)
         .padding(.horizontal, 10)
-        .background(Color(hex: "FBFAFD"))
+        .background(customBackgroundColor ?? Color(hex: "FBFAFD"))
         .cornerRadius(14)
         .overlay(
             RoundedRectangle(cornerRadius: 14)
-                .stroke(Color(hex: "EFEAF0"), lineWidth: 1)
+                .stroke(customTextColor?.opacity(0.1) ?? Color(hex: "EFEAF0"), lineWidth: 1)
         )
         .opacity(isCompleted ? 0.7 : 1.0)
     }
@@ -1779,82 +1816,319 @@ struct ProgressTrendBars: View {
     }
 }
 
-// MARK: - Supporting Views
-struct QuickStat: View {
-    let icon: String
-    let label: String
-    let value: String
-    let color: Color
-    
+struct ZigZagProgressTimeline: View {
+    struct Entry: Identifiable {
+        let id: String
+        let dateText: String
+        let subtitle: String
+        let imageName: String
+        let score: Int
+    }
+
+    let entries: [Entry]
+
+    private let nodeSize: CGFloat = 16
+    private let rowSpacing: CGFloat = 108
+    private let topInset: CGFloat = 18
+
+    private var totalHeight: CGFloat {
+        (topInset * 2) + (CGFloat(max(entries.count - 1, 0)) * rowSpacing)
+    }
+
     var body: some View {
-        VStack(spacing: 8) {
-            ZStack {
-                Circle()
-                    .fill(color.opacity(0.14))
-                    .frame(width: 30, height: 30)
-                Image(systemName: icon)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(color)
+        GeometryReader { proxy in
+            let leftX: CGFloat = 28
+            let rightX = max(leftX + 120, proxy.size.width - 28)
+            let cardWidth = min(max(proxy.size.width * 0.62, 190), proxy.size.width - 96)
+            let leftCardX = min(proxy.size.width - (cardWidth / 2) - 8, leftX + (cardWidth / 2) + 28)
+            let rightCardX = max((cardWidth / 2) + 8, rightX - (cardWidth / 2) - 28)
+
+            ZStack(alignment: .topLeading) {
+                zigZagPath(leftX: leftX, rightX: rightX)
+
+                ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
+                    let isLeft = index.isMultiple(of: 2)
+                    let nodeX = isLeft ? leftX : rightX
+                    let cardX = isLeft ? leftCardX : rightCardX
+                    let pointY = topInset + (CGFloat(index) * rowSpacing)
+
+                    timelineNode
+                        .position(x: nodeX, y: pointY)
+
+                    timelineCard(entry: entry, width: cardWidth)
+                        .position(x: cardX, y: pointY)
+                }
             }
-            
-            Text(value)
-                .font(.system(size: 14, weight: .bold))
-                .foregroundColor(Color(hex: "29292D"))
-            
-            Text(label)
-                .font(.system(size: 10, weight: .medium))
-                .foregroundColor(Color(hex: "8A8A92"))
+            .frame(width: proxy.size.width, height: totalHeight, alignment: .topLeading)
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 12)
-        .background(Color(hex: "F9F8FB"))
-        .cornerRadius(13)
+        .frame(height: max(totalHeight, 120))
+    }
+
+    private var timelineNode: some View {
+        Circle()
+            .fill(Color(hex: "FF6B9D"))
+            .frame(width: nodeSize, height: nodeSize)
+            .overlay(
+                Circle()
+                    .stroke(Color.white, lineWidth: 2)
+            )
+            .shadow(color: Color(hex: "FF6B9D").opacity(0.28), radius: 5, x: 0, y: 2)
+    }
+
+    private func timelineCard(entry: Entry, width: CGFloat) -> some View {
+        HStack(spacing: 10) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(Color(hex: "F3EEF5"))
+
+                Image(systemName: "photo")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(Color(hex: "A9A2AA"))
+
+                Image(entry.imageName)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            }
+            .frame(width: 48, height: 48)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(entry.dateText)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(Color(hex: "2F2F33"))
+                Text(entry.subtitle)
+                    .font(.system(size: 11))
+                    .foregroundColor(Color(hex: "7D7D85"))
+                    .lineLimit(2)
+            }
+
+            Spacer(minLength: 6)
+
+            Text("\(entry.score)")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundColor(Color(hex: "FF5C95"))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(Color(hex: "FFF0F5"))
+                .cornerRadius(9)
+        }
+        .padding(10)
+        .frame(width: width, alignment: .leading)
+        .background(Color(hex: "FAF8FB"))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color(hex: "F2E8EF"), lineWidth: 1)
+        )
+        .cornerRadius(12)
+    }
+
+    private func zigZagPath(leftX: CGFloat, rightX: CGFloat) -> some View {
+        Path { path in
+            guard entries.count > 1 else { return }
+
+            func point(for index: Int) -> CGPoint {
+                CGPoint(
+                    x: index.isMultiple(of: 2) ? leftX : rightX,
+                    y: topInset + (CGFloat(index) * rowSpacing)
+                )
+            }
+
+            path.move(to: point(for: 0))
+
+            for index in 1..<entries.count {
+                let previous = point(for: index - 1)
+                let current = point(for: index)
+                let controlOffset: CGFloat = 34
+                path.addCurve(
+                    to: current,
+                    control1: CGPoint(x: previous.x, y: previous.y + controlOffset),
+                    control2: CGPoint(x: current.x, y: current.y - controlOffset)
+                )
+            }
+        }
+        .stroke(
+            LinearGradient(
+                colors: [Color(hex: "FF6B9D").opacity(0.7), Color(hex: "FFB4C8").opacity(0.6)],
+                startPoint: .top,
+                endPoint: .bottom
+            ),
+            style: StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round)
+        )
     }
 }
 
-struct FlowLayoutView<Data: RandomAccessCollection, Content: View>: View where Data.Element: Hashable {
-    let items: Data
-    let content: (Data.Element) -> Content
-    
-    private var rows: [[Data.Element]] {
-        createRows()
-    }
+struct TimelinePhotoItem: View {
+    let imageName: String
+    let date: String
+    let label: String
+    let score: Int
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ForEach(rows.indices, id: \.self) { rowIndex in
-                HStack(spacing: 8) {
-                    ForEach(rows[rowIndex], id: \.self) { item in
-                        content(item)
-                    }
+        VStack(spacing: 12) {
+            VStack(spacing: 4) {
+                Text("\(score)")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundColor(Color(hex: "FF5C95"))
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(Color.white)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color(hex: "F7D7E4"), lineWidth: 1)
+                    )
+                    .cornerRadius(8)
+
+                ZStack {
+                    Circle()
+                        .fill(Color.white)
+                        .frame(width: 14, height: 14)
+                        .shadow(color: Color.black.opacity(0.1), radius: 2, x: 0, y: 1)
+
+                    Circle()
+                        .fill(Color(hex: "FF5C95"))
+                        .frame(width: 8, height: 8)
+                }
+            }
+            .zIndex(1)
+            
+            VStack(spacing: 8) {
+                Image(imageName)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 100, height: 130)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(Color.white, lineWidth: 2)
+                    )
+                    .shadow(color: Color.black.opacity(0.1), radius: 5, x: 0, y: 3)
+                
+                VStack(spacing: 2) {
+                    Text(label)
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundColor(Color(hex: "2D2D2D"))
+                    Text(date)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(Color(hex: "8A8A92"))
                 }
             }
         }
     }
-    
-    private func createRows() -> [[Data.Element]] {
-        var rows: [[Data.Element]] = [[]]
-        var currentRow = 0
-        var currentWidth: CGFloat = 0
-        let maxWidth: CGFloat = UIScreen.main.bounds.width - 80
-        
-        for item in items {
-            let itemWidth: CGFloat = 120
-            
-            if currentWidth + itemWidth > maxWidth {
-                currentRow += 1
-                rows.append([])
-                currentWidth = 0
-            }
-            
-            rows[currentRow].append(item)
-            currentWidth += itemWidth
-        }
-        
-        return rows
+}
+
+struct TimelineConnector: View {
+    var body: some View {
+        Rectangle()
+            .fill(Color(hex: "E0E0E0"))
+            .frame(width: 40, height: 2)
+            .padding(.top, 6)
     }
 }
 
-#Preview {
-    SkinView()
+struct BeforeAfterSlider: View {
+    let beforeImage: Image
+    let afterImage: Image
+    let beforeLabel: String
+    let afterLabel: String
+
+    @State private var sliderPosition: CGFloat = 0.5
+
+    private let minSliderPosition: CGFloat = 0.08
+    private let maxSliderPosition: CGFloat = 0.92
+    
+    var body: some View {
+        GeometryReader { geometry in
+            let width = max(geometry.size.width, 1)
+            let sliderX = width * sliderPosition
+
+            ZStack(alignment: .leading) {
+                afterImage
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: geometry.size.width, height: geometry.size.height)
+                    .clipped()
+                
+                beforeImage
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: geometry.size.width, height: geometry.size.height)
+                    .clipped()
+                    .mask(
+                        Rectangle()
+                            .frame(width: sliderX)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    )
+
+                HStack {
+                    sliderTag(beforeLabel, background: Color.black.opacity(0.62))
+                    Spacer()
+                    sliderTag(afterLabel, background: Color(hex: "FF5C95").opacity(0.88))
+                }
+                .padding(14)
+                .frame(maxHeight: .infinity, alignment: .top)
+
+                Rectangle()
+                    .fill(Color.white.opacity(0.96))
+                    .frame(width: 2, height: geometry.size.height)
+                    .offset(x: sliderX - 1)
+
+                Circle()
+                    .fill(Color.white)
+                    .frame(width: 34, height: 34)
+                    .shadow(color: Color.black.opacity(0.22), radius: 5, x: 0, y: 2)
+                    .overlay(
+                        Image(systemName: "arrow.left.and.right")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundColor(Color(hex: "FF5C95"))
+                    )
+                    .position(x: sliderX, y: geometry.size.height / 2)
+            }
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        let ratio = value.location.x / width
+                        sliderPosition = min(max(ratio, minSliderPosition), maxSliderPosition)
+                    }
+            )
+        }
+    }
+
+    private func sliderTag(_ text: String, background: Color) -> some View {
+        Text(text)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundColor(.white)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(background)
+            .cornerRadius(10)
+    }
+}
+
+struct StarryBackground: View {
+    var body: some View {
+        ZStack {
+            Color(hex: "151520") // Deep night
+            
+            // Fixed stars to avoid jitter
+            Circle().fill(Color.white.opacity(0.6)).frame(width: 2).offset(x: -100, y: -50)
+            Circle().fill(Color.white.opacity(0.4)).frame(width: 3).offset(x: 120, y: 80)
+            Circle().fill(Color.white.opacity(0.7)).frame(width: 2).offset(x: -60, y: 120)
+            Circle().fill(Color.white.opacity(0.5)).frame(width: 2).offset(x: 80, y: -90)
+            Circle().fill(Color.white.opacity(0.3)).frame(width: 1).offset(x: 0, y: 0)
+            Circle().fill(Color.white.opacity(0.6)).frame(width: 2).offset(x: 150, y: -20)
+            Circle().fill(Color.white.opacity(0.4)).frame(width: 2).offset(x: -140, y: 40)
+            Circle().fill(Color.white.opacity(0.8)).frame(width: 3).offset(x: 40, y: -120)
+            
+            // Moon/Glow effect
+            Circle().fill(Color(hex: "9B6BFF").opacity(0.1)).frame(width: 200).offset(x: 100, y: -100).blur(radius: 50)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 18))
+    }
+}
+
+struct SkinView_Previews: PreviewProvider {
+    static var previews: some View {
+        SkinView()
+    }
 }

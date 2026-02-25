@@ -58,3 +58,7 @@ DerivedData/
 *.key
 *.mobileprovision
 *.jks
+
+# generated fine-tune artifacts
+looksmaxxing_final_finetune.extracted.txt
+looksmaxxing_pdf_finetune.jsonl

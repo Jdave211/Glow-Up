@@ -125,6 +125,8 @@ struct AnalyzingView: View {
     }
 }
 
-#Preview {
-    AnalyzingView(result: .constant(nil), onComplete: {})
+struct AnalyzingView_Previews: PreviewProvider {
+    static var previews: some View {
+        AnalyzingView(result: .constant(nil), onComplete: {})
+    }
 }

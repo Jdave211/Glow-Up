@@ -1,5 +1,9 @@
 import SwiftUI
 
+private let privacyPolicyURL = URL(string: "https://boiled-education-5d3.notion.site/GlowUp-Privacy-Policy-867796a49e504c3d839ce15de6ade6f3?source=copy_link")!
+private let termsOfServiceURL = URL(string: "https://boiled-education-5d3.notion.site/GlowUp-Terms-of-Service-a17b8e90751743dba5a33e2a03dd4b64?source=copy_link")!
+private let supportURL = URL(string: "https://boiled-education-5d3.notion.site/GlowUp-Support-b4226f97acba41e3bd4803fa1d0624fb?source=copy_link")!
+
 private struct PaywallFeature: Identifiable {
     let id = UUID()
     let icon: String
@@ -163,8 +167,9 @@ struct PremiumPaywallView: View {
                         // Footer
                         HStack(spacing: 16) {
                             Button("Restore") { Task { await subscriptionManager.restorePurchases() } }
-                            Button("Terms") { /* Placeholder */ }
-                            Button("Privacy") { /* Placeholder */ }
+                            Button("Terms") { openURL(termsOfServiceURL) }
+                            Button("Privacy") { openURL(privacyPolicyURL) }
+                            Button("Support") { openURL(supportURL) }
                         }
                         .font(.system(size: 12, weight: .medium))
                         .foregroundColor(Color(hex: "8A92A6"))
@@ -272,6 +277,7 @@ struct MiniPostOnboardingPaywallView: View {
     let onUpgradeSuccess: () -> Void
     let onContinueFree: () -> Void
 
+    @Environment(\.openURL) private var openURL
     @ObservedObject private var subscriptionManager = SubscriptionManager.shared
     @State private var selectedPlan: SubscriptionManager.Plan = .weekly
 
@@ -358,6 +364,14 @@ struct MiniPostOnboardingPaywallView: View {
                     }
                 }
                 .font(.system(size: 14, weight: .semibold))
+                .foregroundColor(Color(hex: "8A92A6"))
+
+                HStack(spacing: 16) {
+                    Button("Terms") { openURL(termsOfServiceURL) }
+                    Button("Privacy") { openURL(privacyPolicyURL) }
+                    Button("Support") { openURL(supportURL) }
+                }
+                .font(.system(size: 12, weight: .medium))
                 .foregroundColor(Color(hex: "8A92A6"))
 
                 Spacer(minLength: 10)

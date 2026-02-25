@@ -414,7 +414,9 @@ struct SummaryRow: View {
     }
 }
 
-#Preview {
-    let cartManager = CartManager()
-    return CartView(cartManager: cartManager)
+struct CartView_Previews: PreviewProvider {
+    static var previews: some View {
+        let cartManager = CartManager()
+        return CartView(cartManager: cartManager)
+    }
 }

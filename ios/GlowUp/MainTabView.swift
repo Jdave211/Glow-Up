@@ -410,15 +410,10 @@ struct ChatView: View {
             .cornerRadius(24)
             .overlay(RoundedRectangle(cornerRadius: 24).stroke(Color(hex: "EEEEEE"), lineWidth: 1))
             .padding(.horizontal, 16)
-            .padding(.vertical, 10)
+            .padding(.vertical, 8)
             .background(Color(hex: "FDF6F8"))
-            
-            Text("AI can make mistakes. Check important info.")
-                .font(.system(size: 11))
-                .foregroundColor(Color(hex: "BBBBBB"))
-                .padding(.bottom, 6)
         }
-        .padding(.bottom, 70)
+        .padding(.bottom, 2)
     }
     
     // ────────────────────────────────────────
@@ -1309,7 +1304,12 @@ struct ChatHistorySheet: View {
 // ═══════════════════════════════════════════════════
 
 struct SettingsView: View {
+    private let privacyPolicyURL = URL(string: "https://boiled-education-5d3.notion.site/GlowUp-Privacy-Policy-867796a49e504c3d839ce15de6ade6f3?source=copy_link")!
+    private let termsOfServiceURL = URL(string: "https://boiled-education-5d3.notion.site/GlowUp-Terms-of-Service-a17b8e90751743dba5a33e2a03dd4b64?source=copy_link")!
+    private let supportURL = URL(string: "https://boiled-education-5d3.notion.site/GlowUp-Support-b4226f97acba41e3bd4803fa1d0624fb?source=copy_link")!
+
     var onSignOut: (() -> Void)?
+    @Environment(\.openURL) private var openURL
     @AppStorage("glowup.notifications.enabled") private var notificationsEnabled = true
     @AppStorage("glowup.notifications.routine") private var routineReminders = true
     @AppStorage("glowup.notifications.photo") private var photoReminders = true
@@ -1501,9 +1501,26 @@ struct SettingsView: View {
                 
                 // About Section
                 settingsSection(title: "About", subtitle: "Support and legal") {
-                    SettingsRow(icon: "doc.text", iconColor: Color(hex: "888888"), title: "Privacy Policy")
+                    SettingsRow(
+                        icon: "doc.text",
+                        iconColor: Color(hex: "888888"),
+                        title: "Privacy Policy",
+                        action: { openURL(privacyPolicyURL) }
+                    )
                     Divider().padding(.leading, 44)
-                    SettingsRow(icon: "questionmark.circle", iconColor: Color(hex: "888888"), title: "Help & Support")
+                    SettingsRow(
+                        icon: "doc.plaintext",
+                        iconColor: Color(hex: "888888"),
+                        title: "Terms of Service",
+                        action: { openURL(termsOfServiceURL) }
+                    )
+                    Divider().padding(.leading, 44)
+                    SettingsRow(
+                        icon: "questionmark.circle",
+                        iconColor: Color(hex: "888888"),
+                        title: "Help & Support",
+                        action: { openURL(supportURL) }
+                    )
                     Divider().padding(.leading, 44)
                     
                     HStack(spacing: 14) {
@@ -2718,16 +2735,18 @@ struct CartItem: Identifiable {
 // MARK: - Preview
 // ═══════════════════════════════════════════════════
 
-#Preview {
-    MainTabView(analysisResult: AnalysisResult(
-        agents: [],
-        summary: Summary(
-            totalProducts: 10,
-            totalCost: 150.0,
-            overallConfidence: "0.85",
-            routine: nil,
-            personalized_tips: []
-        ),
-        inference: nil
-    ))
+struct MainTabView_Previews: PreviewProvider {
+    static var previews: some View {
+        MainTabView(analysisResult: AnalysisResult(
+            agents: [],
+            summary: Summary(
+                totalProducts: 10,
+                totalCost: 150.0,
+                overallConfidence: "0.85",
+                routine: nil,
+                personalized_tips: []
+            ),
+            inference: nil
+        ))
+    }
 }

@@ -184,6 +184,8 @@ extension Color {
     }
 }
 
-#Preview {
-    OnboardingView(onComplete: { _ in })
+struct OnboardingView_Previews: PreviewProvider {
+    static var previews: some View {
+        OnboardingView(onComplete: { _ in })
+    }
 }

@@ -1068,31 +1068,40 @@ struct ScaleButtonStyle: ButtonStyle {
 
 // MARK: Pink drape background
 struct PinkDrapeBackground: View {
+    static let baseColor = Color(hex: "FFF0F5")
+    
     var body: some View {
         ZStack {
             LinearGradient(
                 colors: [
-                    Color(hex: "FFF0F5"),
-                    Color(hex: "FFF5F8"),
-                    Color(hex: "FFFAFB"),
-                    Color.white
+                    Color(hex: "FFC4D6"), // Much deeper pink at top
+                    Color(hex: "FFDEEB"), // Soft mid-pink
+                    Color(hex: "FFF0F5")  // Ends on light pink, not white
                 ],
                 startPoint: .top,
                 endPoint: .bottom
             )
             .ignoresSafeArea()
             
+            // Richer, deeper blobs for texture and depth
             Circle()
-                .fill(Color(hex: "FF6B9D").opacity(0.06))
-                .frame(width: 420, height: 420)
-                .offset(x: -120, y: -180)
-                .blur(radius: 40)
+                .fill(Color(hex: "FF6B9D").opacity(0.15))
+                .frame(width: 450, height: 450)
+                .offset(x: -120, y: -200)
+                .blur(radius: 60)
             
             Circle()
-                .fill(Color(hex: "FFB4C8").opacity(0.08))
-                .frame(width: 360, height: 360)
-                .offset(x: 160, y: -220)
-                .blur(radius: 40)
+                .fill(Color(hex: "FF8FB1").opacity(0.18))
+                .frame(width: 380, height: 380)
+                .offset(x: 160, y: -180)
+                .blur(radius: 50)
+                
+            // Bottom accent for grounded warmth
+            Circle()
+                .fill(Color(hex: "FFC2D6").opacity(0.12))
+                .frame(width: 600, height: 600)
+                .offset(x: 0, y: 450)
+                .blur(radius: 80)
         }
     }
 }
@@ -2775,8 +2784,10 @@ struct RoutineSocialShareCard: View {
     }
 }
 
-#Preview {
-    HomeView(
-        cartManager: CartManager()
-    )
+struct HomeView_Previews: PreviewProvider {
+    static var previews: some View {
+        HomeView(
+            cartManager: CartManager()
+        )
+    }
 }

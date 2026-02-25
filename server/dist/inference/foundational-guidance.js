@@ -2,7 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.FOUNDATIONAL_LOOKSMAX_GUIDANCE = void 0;
 exports.resolveGlowupModel = resolveGlowupModel;
-const DEFAULT_GLOWUP_FINETUNED_MODEL = 'ft:gpt-4o-2024-08-06:dave:glowup-chat-v3:D6qlO5WY';
+const DEFAULT_GLOWUP_FINETUNED_MODEL = 'ft:gpt-4o-2024-08-06:dave:glowup-looksmax-v2:DCtqnaqO';
 function readEnv(key) {
     const raw = process.env[key];
     if (!raw)

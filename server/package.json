@@ -16,6 +16,8 @@
     "extract-images": "node src/embeddings/extract-images.js",
     "load-products": "node src/db/load-products-api.js",
     "doc2dataset": "node src/scripts/doc2dataset.js",
+    "finetune:looksmax:prepare": "node src/scripts/finetune-looksmax-pdf.js --prepare-only",
+    "finetune:looksmax:upload": "node src/scripts/finetune-looksmax-pdf.js --upload",
     "upload-finetune": "node src/scripts/upload-finetune.js",
     "scrape": "node src/scripts/scrape-ulta.js",
     "scrape:test": "node src/scripts/scrape-ulta.js --test 5",

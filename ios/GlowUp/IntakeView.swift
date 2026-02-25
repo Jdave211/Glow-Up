@@ -1425,10 +1425,12 @@ struct FlowLayout: Layout {
     }
 }
 
-#Preview {
-    IntakeView(
-        profile: .constant(UserProfile()),
-        onAnalyze: {},
-        onBack: {}
-    )
+struct IntakeView_Previews: PreviewProvider {
+    static var previews: some View {
+        IntakeView(
+            profile: .constant(UserProfile()),
+            onAnalyze: {},
+            onBack: {}
+        )
+    }
 }

@@ -1,4 +1,4 @@
-const DEFAULT_GLOWUP_FINETUNED_MODEL = 'ft:gpt-4o-2024-08-06:dave:glowup-chat-v3:D6qlO5WY';
+const DEFAULT_GLOWUP_FINETUNED_MODEL = 'ft:gpt-4o-2024-08-06:dave:glowup-looksmax-v2:DCtqnaqO';
 
 function readEnv(key: string): string | null {
   const raw = process.env[key];
@@ -32,4 +32,3 @@ export const FOUNDATIONAL_LOOKSMAX_GUIDANCE = `
 - Keep recommendations objective and non-shaming; avoid prescriptive beauty scoring language.
 - For product guidance, ensure claims are grounded in ingredient function and user context.
 `.trim();
-

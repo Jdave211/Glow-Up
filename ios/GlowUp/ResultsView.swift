@@ -371,23 +371,24 @@ struct InsightCard: View {
     }
 }
 
-#Preview {
-    ResultsView(
-        result: AnalysisResult(
-            agents: [],
-            summary: Summary(
-                totalProducts: 6, 
-                totalCost: 125.99, 
-                overallConfidence: "0.89",
-                routine: nil,
-                personalized_tips: ["Test your products before full use", "Stay consistent"]
+struct ResultsView_Previews: PreviewProvider {
+    static var previews: some View {
+        ResultsView(
+            result: AnalysisResult(
+                agents: [],
+                summary: Summary(
+                    totalProducts: 6,
+                    totalCost: 125.99,
+                    overallConfidence: "0.89",
+                    routine: nil,
+                    personalized_tips: ["Test your products before full use", "Stay consistent"]
+                ),
+                inference: nil
             ),
-            inference: nil
-        ),
-        onRestart: {}
-    )
+            onRestart: {}
+        )
+    }
 }
-
 
 
 

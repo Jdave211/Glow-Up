@@ -1319,17 +1319,9 @@ struct SettingsView: View {
     @State private var deleteAccountErrorMessage = ""
     @State private var isDeletingAccount = false
     @State private var showLooksSheet = false
-    @State private var showShippingSheet = false
     @State private var showPaywall = false
     @State private var showNotificationAlert = false
     @State private var notificationAlertMessage = ""
-    @State private var fullName = ""
-    @State private var line1 = ""
-    @State private var line2 = ""
-    @State private var city = ""
-    @State private var state = ""
-    @State private var zip = ""
-    @State private var country = "US"
     
     var body: some View {
         ScrollView(showsIndicators: false) {
@@ -1492,17 +1484,6 @@ struct SettingsView: View {
                     )
                 }
 
-                // Shipping Section
-                settingsSection(title: "Shipping", subtitle: "Used to prefill retailer checkout forms") {
-                    SettingsRow(
-                        icon: "shippingbox.fill",
-                        iconColor: Color(hex: "9B6BFF"),
-                        title: "Shipping Address",
-                        subtitle: SessionManager.shared.hasShippingAddress ? "Saved" : "Add your address",
-                        action: { showShippingSheet = true }
-                    )
-                }
-                
                 // About Section
                 settingsSection(title: "About", subtitle: "Support and legal") {
                     SettingsRow(
@@ -1616,7 +1597,6 @@ struct SettingsView: View {
         }
         .background(PinkDrapeBackground().ignoresSafeArea())
         .onAppear {
-            loadShippingAddress()
             configureNotificationsOnLaunch()
         }
         .onChange(of: notificationsEnabled) { _, _ in
@@ -1662,19 +1642,6 @@ struct SettingsView: View {
             SkincareSettingsSheet()
                 .presentationDetents([.medium, .large])
         }
-        .sheet(isPresented: $showShippingSheet) {
-            ShippingSettingsSheet(
-                fullName: $fullName,
-                line1: $line1,
-                line2: $line2,
-                city: $city,
-                state: $state,
-                zip: $zip,
-                country: $country,
-                onSave: saveShippingAddress
-            )
-            .presentationDetents([.large])
-        }
     }
     
     // MARK: - Section Builder
@@ -1703,31 +1670,6 @@ struct SettingsView: View {
         }
     }
 
-    private func loadShippingAddress() {
-        if let addr = SessionManager.shared.shippingAddress {
-            fullName = addr.fullName
-            line1 = addr.line1
-            line2 = addr.line2
-            city = addr.city
-            state = addr.state
-            zip = addr.zip
-            country = addr.country
-        }
-    }
-
-    private func saveShippingAddress() {
-        let addr = SessionManager.ShippingAddress(
-            fullName: fullName.trimmingCharacters(in: .whitespacesAndNewlines),
-            line1: line1.trimmingCharacters(in: .whitespacesAndNewlines),
-            line2: line2.trimmingCharacters(in: .whitespacesAndNewlines),
-            city: city.trimmingCharacters(in: .whitespacesAndNewlines),
-            state: state.trimmingCharacters(in: .whitespacesAndNewlines),
-            zip: zip.trimmingCharacters(in: .whitespacesAndNewlines),
-            country: country.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "US" : country
-        )
-        SessionManager.shared.shippingAddress = addr
-    }
-    
     // MARK: - Notifications
     private func configureNotificationsOnLaunch() {
         Task {

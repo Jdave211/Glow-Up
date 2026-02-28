@@ -347,6 +347,8 @@ struct SkinPageResponse: Codable {
 }
 
 struct SkinPageProfile: Codable {
+    let id: String?
+    let user_id: String?
     let skin_type: String
     let skin_tone: String
     let skin_tone_value: Double

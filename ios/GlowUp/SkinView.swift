@@ -1,4 +1,6 @@
 import SwiftUI
+import PhotosUI
+import UIKit
 
 // MARK: - ViewModel
 final class SkinPageViewModel: ObservableObject {
@@ -33,6 +35,11 @@ final class SkinPageViewModel: ObservableObject {
                 await MainActor.run {
                     self.page = result
                     self.completedSteps = Set(result.today_checkins)
+                    if (SessionManager.shared.userId?.isEmpty ?? true),
+                       let fallbackUserId = result.profile.user_id,
+                       !fallbackUserId.isEmpty {
+                        SessionManager.shared.userId = fallbackUserId
+                    }
                     self.isLoading = false
                 }
             } catch {
@@ -87,25 +94,19 @@ struct GlowProgressSnapshot: Codable, Identifiable {
     let id: String          // yyyy-MM-dd (one snapshot per day)
     let recordedAt: Date
     let score: Int
-    let completedSteps: Int
-    let totalSteps: Int
-    let morningStreak: Int
-    let eveningStreak: Int
-
-    var completionRate: Double {
-        guard totalSteps > 0 else { return 0 }
-        return Double(completedSteps) / Double(totalSteps)
-    }
+    let imageURL: String?
+    let notes: String?
 }
 
 // MARK: - Main View
 struct SkinView: View {
     private struct ProgressGalleryEntry: Identifiable {
         let id: String
-        let imageName: String
+        let imageURL: String?
         let date: String
         let label: String
         let score: Int
+        let notes: String?
     }
 
     @StateObject private var viewModel = SkinPageViewModel()
@@ -127,6 +128,10 @@ struct SkinView: View {
     @State private var showAddRoutineModal = false
     @State private var progressHistory: [GlowProgressSnapshot] = []
     @State private var selectedTimelinePhoto: ProgressGalleryEntry?
+    @State private var isUploadingTimelinePhoto = false
+    @State private var timelineStatusMessage: String?
+    @State private var timelineStatusIsError = false
+    @State private var selectedTimelinePhotoItem: PhotosPickerItem?
     
     enum SkinTab: String, CaseIterable {
         case progress = "Progress"
@@ -139,29 +144,36 @@ struct SkinView: View {
         if value < 0.70 { return "lightskin_black" }
         return "black"
     }
-
+    
     var body: some View {
         AnyView(observedSkinScreen)
     }
 
     private var baseSkinScreen: AnyView {
         AnyView(
-            skinRootContent
+        skinRootContent
                 .background(skinBackgroundLayer)
-                .refreshable {
-                    viewModel.load(userId: SessionManager.shared.userId, forceRefresh: true)
+            .refreshable {
+                viewModel.load(userId: SessionManager.shared.userId, forceRefresh: true)
+                    await loadPhotoCheckIns()
                 }
-                .onAppear(perform: handleOnAppear)
+                .onChange(of: selectedTimelinePhotoItem) { _, newItem in
+                    guard let newItem else { return }
+                    Task {
+                        await uploadTimelineCheckIn(from: newItem)
+                    }
+            }
+            .onAppear(perform: handleOnAppear)
         )
     }
 
     private var sheetedSkinScreen: AnyView {
         AnyView(
             baseSkinScreen
-                .sheet(isPresented: $showPaywall) {
-                    PremiumPaywallView()
-                }
-                .sheet(item: $routineEditorType) { routineType in
+            .sheet(isPresented: $showPaywall) {
+                PremiumPaywallView()
+            }
+            .sheet(item: $routineEditorType) { routineType in
                     routineEditorSheet(for: routineType)
                 }
                 .sheet(isPresented: $showAddRoutineModal) {
@@ -180,9 +192,7 @@ struct SkinView: View {
         let importObserved = attachRoutineImportObserver(to: destinationObserved)
         let routineObserved = attachRoutineUpdateObserver(to: importObserved)
         let morningObserved = attachMorningStreakObserver(to: routineObserved)
-        let eveningObserved = attachEveningStreakObserver(to: morningObserved)
-        let completedObserved = attachCompletedStepsObserver(to: eveningObserved)
-        return attachSkinScoreObserver(to: completedObserved)
+        return attachEveningStreakObserver(to: morningObserved)
     }
 
     private var morningStreakValue: Int {
@@ -191,14 +201,6 @@ struct SkinView: View {
 
     private var eveningStreakValue: Int {
         viewModel.page?.streaks.evening ?? 0
-    }
-
-    private var completedStepsCount: Int {
-        viewModel.completedSteps.count
-    }
-
-    private var skinScoreRawValue: Double {
-        viewModel.page?.insights.skin_score ?? -1
     }
 
     private func attachDestinationObserver(to view: AnyView) -> AnyView {
@@ -241,37 +243,21 @@ struct SkinView: View {
         )
     }
 
-    private func attachCompletedStepsObserver(to view: AnyView) -> AnyView {
-        AnyView(
-            view.onChange(of: completedStepsCount) { _, _ in
-                recordProgressSnapshot()
-            }
-        )
-    }
-
-    private func attachSkinScoreObserver(to view: AnyView) -> AnyView {
-        AnyView(
-            view.onChange(of: skinScoreRawValue) { _, _ in
-                recordProgressSnapshot()
-            }
-        )
-    }
-
     private func routineEditorSheet(for routineType: HomeView.RoutineType) -> some View {
-        RoutineDetailSheet(
-            routineType: routineType,
-            steps: feedRoutineSteps(for: routineType),
-            morningSteps: feedRoutineSteps(for: .morning),
-            eveningSteps: feedRoutineSteps(for: .evening),
+                RoutineDetailSheet(
+                    routineType: routineType,
+                    steps: feedRoutineSteps(for: routineType),
+                    morningSteps: feedRoutineSteps(for: .morning),
+                    eveningSteps: feedRoutineSteps(for: .evening),
             weeklySteps: feedRoutineSteps(for: .weekly),
-            completedSteps: completedStepsBinding,
-            streaks: $routineStreaks,
-            userId: SessionManager.shared.userId ?? "",
-            onRoutineUpdated: {
-                viewModel.load(userId: SessionManager.shared.userId, forceRefresh: true)
+                    completedSteps: completedStepsBinding,
+                    streaks: $routineStreaks,
+                    userId: SessionManager.shared.userId ?? "",
+                    onRoutineUpdated: {
+                        viewModel.load(userId: SessionManager.shared.userId, forceRefresh: true)
+                    }
+                )
             }
-        )
-    }
 
     private var skinBackgroundLayer: some View {
         ZStack(alignment: .top) {
@@ -300,15 +286,15 @@ struct SkinView: View {
 
     @ViewBuilder
     private var sharePreviewOverlay: some View {
-        if let sharePreview {
-            RoutineSharePreviewModal(
-                preview: sharePreview,
-                onClose: { self.sharePreview = nil },
-                onShare: { handleSharePreviewShare(sharePreview) }
-            )
-            .zIndex(2)
-        }
-    }
+                if let sharePreview {
+                    RoutineSharePreviewModal(
+                        preview: sharePreview,
+                        onClose: { self.sharePreview = nil },
+                        onShare: { handleSharePreviewShare(sharePreview) }
+                    )
+                    .zIndex(2)
+                }
+            }
 
     @ViewBuilder
     private var timelinePhotoOverlay: some View {
@@ -341,9 +327,7 @@ struct SkinView: View {
                         .buttonStyle(.plain)
                     }
 
-                    Image(selectedTimelinePhoto.imageName)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
+                    TimelineRemoteImage(urlString: selectedTimelinePhoto.imageURL)
                         .frame(maxWidth: .infinity)
                         .frame(height: 420)
                         .clipShape(RoundedRectangle(cornerRadius: 18))
@@ -380,7 +364,7 @@ struct SkinView: View {
             }
             .transition(.opacity.combined(with: .scale(scale: 0.98)))
             .zIndex(3)
-        }
+            }
     }
 
     private var skinRootContent: some View {
@@ -407,11 +391,11 @@ struct SkinView: View {
                     selectedTabContent
                 }
             )
-        }
-
+                }
+                
         if viewModel.error != nil {
             return AnyView(errorState)
-        }
+            }
 
         return AnyView(EmptyView())
     }
@@ -438,8 +422,9 @@ struct SkinView: View {
         }
         routineLibrary = SessionManager.shared.routineLibrary
         consumePendingSharedRoutineTokenIfNeeded()
-        loadProgressHistory()
-        recordProgressSnapshot()
+        Task {
+            await loadPhotoCheckIns()
+        }
     }
 
     private func handleSharePreviewShare(_ preview: RoutineSharePreviewData) {
@@ -467,12 +452,163 @@ struct SkinView: View {
 
     private func handleMorningStreakChange(_ newValue: Int) {
         routineStreaks.morning = newValue
-        recordProgressSnapshot()
     }
 
     private func handleEveningStreakChange(_ newValue: Int) {
         routineStreaks.evening = newValue
-        recordProgressSnapshot()
+    }
+
+    private var resolvedUserId: String? {
+        let sessionId = SessionManager.shared.userId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !sessionId.isEmpty { return sessionId }
+        let profileId = viewModel.profile?.user_id?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return profileId.isEmpty ? nil : profileId
+    }
+
+    @MainActor
+    private func applyPhotoCheckIns(_ checkIns: [APIService.PhotoCheckIn]) {
+        let sorted = checkIns.sorted {
+            (parseISODate($0.created_at) ?? .distantPast) < (parseISODate($1.created_at) ?? .distantPast)
+        }
+        progressHistory = sorted.map { checkIn in
+            GlowProgressSnapshot(
+                id: checkIn.id,
+                recordedAt: parseISODate(checkIn.created_at) ?? Date(),
+                score: scoreForCheckIn(checkIn),
+                imageURL: primaryPhotoURL(for: checkIn),
+                notes: checkIn.user_notes
+            )
+        }
+    }
+
+    private func loadPhotoCheckIns() async {
+        guard let userId = resolvedUserId else {
+            await MainActor.run {
+                progressHistory = []
+                timelineStatusMessage = nil
+                timelineStatusIsError = false
+            }
+            return
+        }
+
+        do {
+            let checkIns = try await APIService.shared.getPhotoCheckIns(userId: userId)
+            await MainActor.run {
+                applyPhotoCheckIns(checkIns)
+                if !isUploadingTimelinePhoto {
+                    timelineStatusMessage = nil
+                    timelineStatusIsError = false
+                }
+            }
+        } catch {
+            await MainActor.run {
+                if progressHistory.isEmpty {
+                    timelineStatusIsError = true
+                    timelineStatusMessage = "Couldn't load progress photos right now."
+                }
+            }
+        }
+    }
+
+    private func uploadTimelineCheckIn(from item: PhotosPickerItem) async {
+        guard let userId = resolvedUserId else {
+            await MainActor.run {
+                timelineStatusIsError = true
+                timelineStatusMessage = "Sign in to add progress photos."
+                selectedTimelinePhotoItem = nil
+            }
+            return
+        }
+
+        await MainActor.run {
+            isUploadingTimelinePhoto = true
+            timelineStatusIsError = false
+            timelineStatusMessage = "Uploading check-in photo..."
+        }
+
+        do {
+            guard let data = try await item.loadTransferable(type: Data.self),
+                  let image = UIImage(data: data),
+                  let payload = encodeTimelinePhotoPayload(image) else {
+                throw APIError.serverMessage("Couldn't read the selected photo.")
+            }
+
+            _ = try await APIService.shared.savePhotoCheckIn(
+                userId: userId,
+                skinProfileId: viewModel.profile?.id,
+                photos: ["front": payload]
+            )
+
+            await loadPhotoCheckIns()
+            await MainActor.run {
+                selectedTimelinePhotoItem = nil
+                isUploadingTimelinePhoto = false
+                timelineStatusIsError = false
+                timelineStatusMessage = "Progress photo added."
+            }
+            viewModel.load(userId: userId, forceRefresh: true)
+        } catch {
+            await MainActor.run {
+                selectedTimelinePhotoItem = nil
+                isUploadingTimelinePhoto = false
+                timelineStatusIsError = true
+                timelineStatusMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func primaryPhotoURL(for checkIn: APIService.PhotoCheckIn) -> String? {
+        let candidates = [checkIn.photo_front_url, checkIn.photo_left_url, checkIn.photo_right_url]
+        for candidate in candidates {
+            guard let trimmed = candidate?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !trimmed.isEmpty else { continue }
+            return trimmed
+        }
+        return nil
+    }
+
+    private func scoreForCheckIn(_ checkIn: APIService.PhotoCheckIn) -> Int {
+        let hydration = clamp01(checkIn.image_analysis?.skin?.hydration_score ?? viewModel.skinScore)
+        let oiliness = clamp01(checkIn.image_analysis?.skin?.oiliness_score ?? 0.5)
+        let texture = clamp01(checkIn.image_analysis?.skin?.texture_score ?? viewModel.skinScore)
+        let normalized = (hydration + (1 - oiliness) + texture) / 3
+        return Int((normalized * 100).rounded())
+    }
+
+    private func clamp01(_ value: Double) -> Double {
+        guard value.isFinite else { return 0.5 }
+        return max(0, min(1, value))
+    }
+
+    private func parseISODate(_ value: String?) -> Date? {
+        guard let value, !value.isEmpty else { return nil }
+        let isoWithFraction = ISO8601DateFormatter()
+        isoWithFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let parsed = isoWithFraction.date(from: value) {
+            return parsed
+        }
+        let isoPlain = ISO8601DateFormatter()
+        isoPlain.formatOptions = [.withInternetDateTime]
+        return isoPlain.date(from: value)
+    }
+
+    private func encodeTimelinePhotoPayload(_ image: UIImage) -> String? {
+        let resized = resizeTimelineImageIfNeeded(image, maxDimension: 1280)
+        guard let jpeg = resized.jpegData(compressionQuality: 0.8) else { return nil }
+        return "data:image/jpeg;base64,\(jpeg.base64EncodedString())"
+    }
+
+    private func resizeTimelineImageIfNeeded(_ image: UIImage, maxDimension: CGFloat) -> UIImage {
+        let size = image.size
+        let maxSide = max(size.width, size.height)
+        guard maxSide > maxDimension else { return image }
+
+        let scale = maxDimension / maxSide
+        let target = CGSize(width: size.width * scale, height: size.height * scale)
+        let renderer = UIGraphicsImageRenderer(size: target)
+        return renderer.image { _ in
+            image.draw(in: CGRect(origin: .zero, size: target))
+        }
     }
     
     // MARK: - Loading
@@ -499,7 +635,7 @@ struct SkinView: View {
     }
     
     private var errorState: some View {
-        VStack(spacing: 16) {
+        return VStack(spacing: 16) {
             Image(systemName: "exclamationmark.triangle")
                 .font(.system(size: 40))
                 .foregroundColor(Color(hex: "FF6B9D"))
@@ -521,24 +657,26 @@ struct SkinView: View {
     
     // MARK: - Header
     private var headerSection: some View {
-        HStack(alignment: .center) {
+        let displayScore = Int((viewModel.skinScore * 100).rounded())
+
+        return HStack(alignment: .center) {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Your Skin Health")
                     .font(.system(size: 14, weight: .bold, design: .rounded))
-                    .foregroundColor(Color(hex: "FF5C95"))
+                        .foregroundColor(Color(hex: "FF5C95"))
                     .textCase(.uppercase)
                     .tracking(1)
                 
-                Text("Glow Score: 92")
+                Text("Glow Score: \(displayScore)")
                     .font(.custom("Didot", size: 36))
                     .fontWeight(.bold)
                     .foregroundColor(Color(hex: "2D2D2D"))
-                
-                HStack(spacing: 8) {
+
+            HStack(spacing: 8) {
                     Text(viewModel.profile?.skin_type.capitalized ?? "Normal")
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundColor(Color(hex: "666666"))
-                        .padding(.horizontal, 10)
+                    .padding(.horizontal, 10)
                         .padding(.vertical, 5)
                         .background(Color.white.opacity(0.8))
                         .cornerRadius(8)
@@ -553,23 +691,23 @@ struct SkinView: View {
             Spacer()
             
             // Simple Score Visual
-            ZStack {
-                Circle()
+                ZStack {
+                    Circle()
                     .stroke(Color(hex: "FFF0F5"), lineWidth: 6)
                     .frame(width: 60, height: 60)
-                
-                Circle()
-                    .trim(from: 0, to: 0.92)
-                    .stroke(
+                    
+                    Circle()
+                    .trim(from: 0, to: max(0.02, min(viewModel.skinScore, 1.0)))
+                        .stroke(
                         LinearGradient(colors: [Color(hex: "FF5C95"), Color(hex: "FF98B7")], startPoint: .top, endPoint: .bottom),
                         style: StrokeStyle(lineWidth: 6, lineCap: .round)
                     )
                     .frame(width: 60, height: 60)
-                    .rotationEffect(.degrees(-90))
+                        .rotationEffect(.degrees(-90))
                 
-                Text("92")
-                    .font(.system(size: 18, weight: .bold))
-                    .foregroundColor(Color(hex: "2D2D2D"))
+                Text("\(displayScore)")
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundColor(Color(hex: "2D2D2D"))
             }
         }
         .padding(24)
@@ -623,7 +761,7 @@ struct SkinView: View {
             if !routineLibrary.isEmpty {
                 routineLibrarySection
             }
-
+            
             // Morning Routine
             if !viewModel.morningSteps.isEmpty {
                 routineSection(
@@ -784,7 +922,7 @@ struct SkinView: View {
         let textColor = isEvening ? Color.white : Color(hex: "2D2D2D")
         let completionTint = doneCount == steps.count ? Color(hex: "3B8F68") : (isEvening ? Color.white.opacity(0.5) : Color(hex: "8E8E95"))
         let rowBg = isEvening ? Color(hex: "2C2C35").opacity(0.6) : Color(hex: "FBFAFD")
-        
+
         return VStack(alignment: .leading, spacing: 14) {
             // Header
             HStack(spacing: 10) {
@@ -873,6 +1011,16 @@ struct SkinView: View {
         )
         .cornerRadius(18)
         .shadow(color: isEvening ? Color.black.opacity(0.3) : Color.black.opacity(0.05), radius: 10, x: 0, y: 4)
+        .contentShape(RoundedRectangle(cornerRadius: 18))
+        .onTapGesture {
+            if routineType == "morning" {
+                routineEditorType = .morning
+            } else if routineType == "evening" {
+                routineEditorType = .evening
+            } else if routineType == "weekly" {
+                routineEditorType = .weekly
+            }
+        }
     }
 
     private func completedRoutineCount(steps: [SkinPageRoutineStep], routineType: String) -> Int {
@@ -974,7 +1122,7 @@ struct SkinView: View {
         let recent: [GlowProgressSnapshot]
         let timeline: [GlowProgressSnapshot]
         let scoreDelta: Int
-        let averageCompletion: Double
+        let checkInCount: Int
         let bestStreak: Int
 
         var hasHistory: Bool { !history.isEmpty }
@@ -984,29 +1132,132 @@ struct SkinView: View {
         let sortedHistory = progressHistory.sorted { $0.recordedAt < $1.recordedAt }
         let recent = Array(sortedHistory.suffix(8))
         let timeline = recent
-        let scoreDelta = (sortedHistory.last?.score ?? 0) - (sortedHistory.first?.score ?? 0)
-        let averageCompletion = sortedHistory.isEmpty
-            ? 0
-            : sortedHistory.map(\.completionRate).reduce(0, +) / Double(sortedHistory.count)
-        let bestStreak = sortedHistory.map { max($0.morningStreak, $0.eveningStreak) }.max() ?? 0
+        let firstScore = sortedHistory.first?.score
+        let latestScore = sortedHistory.last?.score ?? Int((viewModel.skinScore * 100).rounded())
+        let scoreDelta = (firstScore != nil) ? (latestScore - (firstScore ?? latestScore)) : 0
+        let bestStreak = max(viewModel.streaks?.morning ?? 0, viewModel.streaks?.evening ?? 0)
         return ProgressSummary(
             history: sortedHistory,
             recent: recent,
             timeline: timeline,
             scoreDelta: scoreDelta,
-            averageCompletion: averageCompletion,
+            checkInCount: sortedHistory.count,
             bestStreak: bestStreak
         )
     }
 
     private var progressContent: some View {
         let summary = progressSummary
-        return VStack(spacing: 24) {
-            progressGallerySection(summary)
-            progressComparisonSection(summary)
-            progressOverviewCard(summary)
+        return Group {
+            if summary.hasHistory {
+                VStack(spacing: 24) {
+                    progressGallerySection(summary)
+                    progressComparisonSection(summary)
+                    progressOverviewCard(summary)
+                }
+                .padding(.horizontal, 20)
+            } else {
+                progressEmptyState
+                    .padding(.horizontal, 20)
+            }
         }
-        .padding(.horizontal, 20)
+    }
+
+    private var progressEmptyState: some View {
+        VStack(spacing: 20) {
+            VStack(spacing: 10) {
+                ZStack {
+                    Circle()
+                        .fill(
+                            LinearGradient(
+                                colors: [Color(hex: "FFE7F0"), Color(hex: "FFD8E8")],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .frame(width: 74, height: 74)
+                    Image(systemName: "camera.badge.ellipsis")
+                        .font(.system(size: 30, weight: .semibold))
+                        .foregroundColor(Color(hex: "FF5C95"))
+                }
+
+                Text("Start Your Glow Timeline")
+                    .font(.system(size: 24, weight: .bold, design: .rounded))
+                        .foregroundColor(Color(hex: "2D2D2D"))
+                    .multilineTextAlignment(.center)
+
+                Text("Upload your first check-in photo so GlowUp can track real progress, score trends, and before/after improvements.")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(Color(hex: "8A8A92"))
+                    .multilineTextAlignment(.center)
+            }
+            .padding(.top, 12)
+
+            VStack(alignment: .leading, spacing: 10) {
+                progressEmptyBullet("Take a front-facing selfie in daylight")
+                progressEmptyBullet("Repeat every 7-14 days")
+                progressEmptyBullet("Compare score + visual changes over time")
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.white.opacity(0.9))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14)
+                    .stroke(Color(hex: "F0E2EA"), lineWidth: 1)
+            )
+            .cornerRadius(14)
+
+            PhotosPicker(
+                selection: $selectedTimelinePhotoItem,
+                matching: .images,
+                preferredItemEncoding: .automatic
+            ) {
+                HStack(spacing: 8) {
+                    Image(systemName: isUploadingTimelinePhoto ? "hourglass" : "plus.circle.fill")
+                    Text(isUploadingTimelinePhoto ? "Uploading..." : "Add First Progress Photo")
+                        .font(.system(size: 15, weight: .bold))
+                }
+                .foregroundColor(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .background(
+                    LinearGradient(
+                        colors: [Color(hex: "FF5C95"), Color(hex: "FF8FB7")],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+                .cornerRadius(14)
+            }
+            .disabled(isUploadingTimelinePhoto)
+
+            if let timelineStatusMessage {
+                Text(timelineStatusMessage)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(timelineStatusIsError ? Color(hex: "D64545") : Color(hex: "3B8F68"))
+                    .multilineTextAlignment(.center)
+                    }
+                }
+                .padding(18)
+        .background(Color(hex: "FFF7FB").opacity(0.96))
+        .overlay(
+            RoundedRectangle(cornerRadius: 20)
+                .stroke(Color(hex: "F1E4EC"), lineWidth: 1)
+        )
+        .cornerRadius(20)
+    }
+
+    private func progressEmptyBullet(_ text: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Circle()
+                .fill(Color(hex: "FF5C95"))
+                .frame(width: 7, height: 7)
+                .padding(.top, 5)
+            Text(text)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundColor(Color(hex: "54545A"))
+            Spacer(minLength: 0)
+        }
     }
 
     // MARK: - New Visual Progress Helpers
@@ -1024,16 +1275,36 @@ struct SkinView: View {
             }
             .padding(.horizontal, 4)
 
+            if entries.isEmpty {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("No progress photos yet.")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundColor(Color(hex: "2D2D2D"))
+                    Text("Tap the + node to add your first check-in photo.")
+                        .font(.system(size: 13))
+                        .foregroundColor(Color(hex: "8A8A92"))
+                }
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.white.opacity(0.9))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14)
+                        .stroke(Color(hex: "EFE8EE"), lineWidth: 1)
+                )
+                .cornerRadius(14)
+            }
+
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(alignment: .top, spacing: 0) {
                     ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
                         Button {
+                            guard entry.imageURL != nil else { return }
                             withAnimation(.easeInOut(duration: 0.2)) {
                                 selectedTimelinePhoto = entry
                             }
                         } label: {
                             TimelinePhotoItem(
-                                imageName: entry.imageName,
+                                imageURL: entry.imageURL,
                                 date: entry.date,
                                 label: entry.label,
                                 score: entry.score
@@ -1045,24 +1316,48 @@ struct SkinView: View {
                             TimelineConnector()
                         }
                     }
+
+                    if !entries.isEmpty {
+                        TimelineConnector()
+                    }
+
+                    PhotosPicker(
+                        selection: $selectedTimelinePhotoItem,
+                        matching: .images,
+                        preferredItemEncoding: .automatic
+                    ) {
+                        TimelineAddItem(isUploading: isUploadingTimelinePhoto)
+                    }
+                    .buttonStyle(.plain)
                 }
                 .padding(.horizontal, 20)
                 .padding(.bottom, 15)
+            }
+
+            if let timelineStatusMessage {
+                Text(timelineStatusMessage)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(timelineStatusIsError ? Color(hex: "D64545") : Color(hex: "3B8F68"))
+                    .padding(.horizontal, 4)
             }
         }
     }
 
     private func progressComparisonSection(_ summary: ProgressSummary) -> some View {
-        let beforeLabel = "Before • Jan 24"
-        let afterLabel = "After • Feb 23"
+        let snapshotsWithPhotos = summary.history.filter { snapshot in
+            guard let imageURL = snapshot.imageURL else { return false }
+            return !imageURL.isEmpty
+        }
+        let beforeSnapshot = snapshotsWithPhotos.first
+        let afterSnapshot = snapshotsWithPhotos.last
         
         return VStack(alignment: .leading, spacing: 14) {
             HStack {
                 Text("Before & After")
                     .font(.system(size: 18, weight: .bold))
                     .foregroundColor(Color(hex: "2D2D2D"))
-                
-                Spacer()
+
+            Spacer()
                 
                 Text("Slide to compare")
                     .font(.system(size: 12, weight: .semibold))
@@ -1070,48 +1365,57 @@ struct SkinView: View {
                     .padding(.horizontal, 10)
                     .padding(.vertical, 5)
                     .background(Color(hex: "FFF0F5"))
-                    .cornerRadius(12)
-            }
-            .padding(.horizontal, 4)
-            
-            BeforeAfterSlider(
-                beforeImage: Image("progress_stage_1"),
-                afterImage: Image("progress_stage_3"),
-                beforeLabel: beforeLabel,
-                afterLabel: afterLabel
-            )
-            .frame(height: 340)
-            .clipShape(RoundedRectangle(cornerRadius: 24))
-            .shadow(color: Color(hex: "FFB4C8").opacity(0.3), radius: 15, x: 0, y: 10)
-            .padding(.horizontal, 4)
-        }
+        .cornerRadius(12)
     }
+            .padding(.horizontal, 4)
 
-    private func progressGallerySnapshots(from summary: ProgressSummary) -> [GlowProgressSnapshot] {
-        let timeline = summary.timeline
-        guard !timeline.isEmpty else { return [] }
-        guard timeline.count > 3 else { return timeline }
-
-        let first = timeline.first!
-        let middle = timeline[timeline.count / 2]
-        let last = timeline.last!
-
-        var selected: [GlowProgressSnapshot] = []
-        for snapshot in [first, middle, last] {
-            if !selected.contains(where: { $0.id == snapshot.id }) {
-                selected.append(snapshot)
+            if let beforeSnapshot,
+               let afterSnapshot,
+               beforeSnapshot.id != afterSnapshot.id {
+                BeforeAfterSlider(
+                    beforeImageURL: beforeSnapshot.imageURL,
+                    afterImageURL: afterSnapshot.imageURL,
+                    beforeLabel: "Before • \(progressDateLabel(beforeSnapshot.recordedAt))",
+                    afterLabel: "After • \(progressDateLabel(afterSnapshot.recordedAt))"
+                )
+                .frame(height: 340)
+                .clipShape(RoundedRectangle(cornerRadius: 24))
+                .shadow(color: Color(hex: "FFB4C8").opacity(0.3), radius: 15, x: 0, y: 10)
+                .padding(.horizontal, 4)
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Add at least two check-in photos to compare.")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(Color(hex: "2D2D2D"))
+                    Text("Use the + node in your timeline to upload new progress photos.")
+                        .font(.system(size: 13))
+                        .foregroundColor(Color(hex: "8A8A92"))
+                }
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.white.opacity(0.9))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14)
+                        .stroke(Color(hex: "EFE8EE"), lineWidth: 1)
+                )
+                .cornerRadius(14)
+                .padding(.horizontal, 4)
             }
         }
-        return selected
     }
 
     private func progressGalleryEntries(from summary: ProgressSummary) -> [ProgressGalleryEntry] {
-        // Always use the 3-stage demo so the timeline shows three distinct images (before/mid/after).
-        return [
-            ProgressGalleryEntry(id: "default-1", imageName: "progress_stage_1", date: "Jan 24", label: "Day 1", score: 59),
-            ProgressGalleryEntry(id: "default-2", imageName: "progress_stage_2", date: "Feb 07", label: "Day 14", score: 75),
-            ProgressGalleryEntry(id: "default-3", imageName: "progress_stage_3", date: "Feb 23", label: "Day 30", score: 92)
-        ]
+        let baselineDate = summary.history.first?.recordedAt
+        return summary.timeline.map { snapshot in
+            ProgressGalleryEntry(
+                id: snapshot.id,
+                imageURL: snapshot.imageURL,
+                date: progressDateLabel(snapshot.recordedAt),
+                label: progressDayLabel(snapshot, baselineDate: baselineDate),
+                score: snapshot.score,
+                notes: snapshot.notes
+            )
+        }
     }
 
     private func progressDayLabel(_ snapshot: GlowProgressSnapshot, baselineDate: Date?) -> String {
@@ -1121,7 +1425,10 @@ struct SkinView: View {
     }
 
     private func progressOverviewCard(_ summary: ProgressSummary) -> some View {
-        VStack(alignment: .leading, spacing: 16) {
+        let scoreDeltaValue = summary.scoreDelta
+        let scoreDeltaText = scoreDeltaValue == 0 ? "0" : (scoreDeltaValue > 0 ? "+\(scoreDeltaValue)" : "\(scoreDeltaValue)")
+
+        return VStack(alignment: .leading, spacing: 16) {
             Text("Consistency Metrics")
                 .font(.system(size: 18, weight: .bold))
                 .foregroundColor(Color(hex: "2D2D2D"))
@@ -1130,151 +1437,27 @@ struct SkinView: View {
             HStack(spacing: 12) {
                 progressMetricCard(
                     title: "Score Change",
-                    value: "+33",
-                    tint: Color(hex: "3B8F68")
+                    value: scoreDeltaText,
+                    tint: scoreDeltaValue >= 0 ? Color(hex: "3B8F68") : Color(hex: "D64545")
                 )
                 progressMetricCard(
-                    title: "Avg Consistency",
-                    value: "98%",
+                    title: "Check-ins",
+                    value: "\(summary.checkInCount)",
                     tint: Color(hex: "5B86FF")
                 )
                 progressMetricCard(
                     title: "Best Streak",
-                    value: "14d",
+                    value: "\(summary.bestStreak)d",
                     tint: Color(hex: "FF8E3C")
                 )
             }
         }
     }
 
-    @ViewBuilder
-    private func progressTrendCard(_ summary: ProgressSummary) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Score Trend")
-                .font(.system(size: 15, weight: .bold))
-                .foregroundColor(Color(hex: "666666"))
-            
-            if summary.hasHistory {
-                ProgressTrendBars(snapshots: summary.recent)
-                    .padding(.top, 10)
-            } else {
-                Text("No data yet. Complete routines to see your trend.")
-                    .font(.system(size: 13))
-                    .foregroundColor(Color(hex: "8F8F96"))
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.vertical, 20)
-            }
-        }
-        .padding(20)
-        .background(Color.white.opacity(0.8))
-        .cornerRadius(20)
-        .shadow(color: Color.black.opacity(0.03), radius: 8, x: 0, y: 4)
-    }
-
-    @ViewBuilder
-    private func progressTimelineCard(_ summary: ProgressSummary) -> some View {
-        let entries = progressTimelineEntries(from: summary)
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Timeline")
-                .font(.system(size: 16, weight: .bold))
-                .foregroundColor(Color(hex: "2D2D2D"))
-
-            if summary.hasHistory && !entries.isEmpty {
-                ZigZagProgressTimeline(entries: entries)
-            } else {
-                Text("Your timeline will populate as you keep using your routine.")
-                    .font(.system(size: 13))
-                    .foregroundColor(Color(hex: "8F8F96"))
-            }
-        }
-        .padding(18)
-        .background(Color.white)
-        .cornerRadius(16)
-    }
-
-    private func progressTimelineEntries(from summary: ProgressSummary) -> [ZigZagProgressTimeline.Entry] {
-        summary.timeline.map { snapshot in
-            ZigZagProgressTimeline.Entry(
-                id: snapshot.id,
-                dateText: progressDateLabel(snapshot.recordedAt),
-                subtitle: progressTimelineSubtitle(snapshot),
-                imageName: progressStageImageName(for: snapshot.score),
-                score: snapshot.score
-            )
-        }
-    }
-
-    private func progressStageImageName(for score: Int) -> String {
-        if score >= 78 { return "progress_stage_3" }
-        if score >= 62 { return "progress_stage_2" }
-        return "progress_stage_1"
-    }
-
-    private var progressHistoryKey: String {
-        "com.glowup.progressHistory.\(SessionManager.shared.userId ?? "guest")"
-    }
-
-    private func loadProgressHistory() {
-        guard let data = UserDefaults.standard.data(forKey: progressHistoryKey),
-              let decoded = try? JSONDecoder().decode([GlowProgressSnapshot].self, from: data) else {
-            progressHistory = []
-            return
-        }
-        progressHistory = decoded.sorted { $0.recordedAt < $1.recordedAt }
-    }
-
-    private func persistProgressHistory(_ snapshots: [GlowProgressSnapshot]) {
-        guard let data = try? JSONEncoder().encode(snapshots) else { return }
-        UserDefaults.standard.set(data, forKey: progressHistoryKey)
-        progressHistory = snapshots
-    }
-
-    private func recordProgressSnapshot() {
-        guard viewModel.page != nil else { return }
-        let date = Date()
-        let dayId = progressSnapshotDayId(date)
-        let totalSteps = max(viewModel.morningSteps.count + viewModel.eveningSteps.count, 0)
-        let snapshot = GlowProgressSnapshot(
-            id: dayId,
-            recordedAt: date,
-            score: Int((viewModel.skinScore * 100).rounded()),
-            completedSteps: viewModel.completedSteps.count,
-            totalSteps: totalSteps,
-            morningStreak: viewModel.streaks?.morning ?? 0,
-            eveningStreak: viewModel.streaks?.evening ?? 0
-        )
-
-        var snapshots = progressHistory.sorted { $0.recordedAt < $1.recordedAt }
-        if let index = snapshots.firstIndex(where: { $0.id == dayId }) {
-            snapshots[index] = snapshot
-        } else {
-            snapshots.append(snapshot)
-        }
-        // Keep last 120 daily points (~4 months) in local storage.
-        if snapshots.count > 120 {
-            snapshots.removeFirst(snapshots.count - 120)
-        }
-        persistProgressHistory(snapshots)
-    }
-
-    private func progressSnapshotDayId(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.calendar = Calendar(identifier: .gregorian)
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM-dd"
-        return formatter.string(from: date)
-    }
-
     private func progressDateLabel(_ date: Date) -> String {
         let formatter = DateFormatter()
         formatter.dateFormat = "MMM d"
         return formatter.string(from: date)
-    }
-
-    private func progressTimelineSubtitle(_ snapshot: GlowProgressSnapshot) -> String {
-        let stepsTotal = max(snapshot.totalSteps, 1)
-        let streak = max(snapshot.morningStreak, snapshot.eveningStreak)
-        return "Score \(snapshot.score) • \(snapshot.completedSteps)/\(stepsTotal) steps • Streak \(streak)d"
     }
 
     private func progressMetricCard(title: String, value: String, tint: Color) -> some View {
@@ -1291,7 +1474,7 @@ struct SkinView: View {
         .background(Color(hex: "FAF9FC"))
         .cornerRadius(12)
     }
-    
+
     private func feedRoutineSteps(for type: HomeView.RoutineType) -> [FeedRoutineStep] {
         let source: [SkinPageRoutineStep]
         switch type {
@@ -1699,267 +1882,8 @@ struct SkinRoutineStepRow: View {
     }
 }
 
-// MARK: - Timeline Row
-struct TimelineRow: View {
-    let title: String
-    let subtitle: String
-    let icon: String
-    let color: Color
-    let isLast: Bool
-    let accessory: AnyView?
-    
-    init(
-        title: String,
-        subtitle: String,
-        icon: String,
-        color: Color,
-        isLast: Bool,
-        accessory: AnyView? = nil
-    ) {
-        self.title = title
-        self.subtitle = subtitle
-        self.icon = icon
-        self.color = color
-        self.isLast = isLast
-        self.accessory = accessory
-    }
-    
-    var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            VStack(spacing: 6) {
-                ZStack {
-                    Circle()
-                        .fill(color.opacity(0.15))
-                        .frame(width: 24, height: 24)
-                    Image(systemName: icon)
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundColor(color)
-                }
-                
-                if !isLast {
-                    Rectangle()
-                        .fill(Color(hex: "F0D9E3"))
-                        .frame(width: 2, height: 28)
-                }
-            }
-            
-            VStack(alignment: .leading, spacing: 6) {
-                Text(title)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(Color(hex: "2D2D2D"))
-                
-                Text(subtitle)
-                    .font(.system(size: 12))
-                    .foregroundColor(Color(hex: "888888"))
-                    .lineSpacing(3)
-            }
-            
-            Spacer()
-            
-            if let accessory {
-                accessory
-            }
-        }
-    }
-}
-
-struct ProgressTrendBars: View {
-    let snapshots: [GlowProgressSnapshot]
-
-    private var minScore: Double {
-        Double(snapshots.map(\.score).min() ?? 0)
-    }
-
-    private var maxScore: Double {
-        Double(snapshots.map(\.score).max() ?? 100)
-    }
-
-    private func normalizedHeight(for score: Int) -> CGFloat {
-        let minH: CGFloat = 20
-        let maxH: CGFloat = 96
-        let spread = max(maxScore - minScore, 1)
-        let progress = (Double(score) - minScore) / spread
-        return minH + (maxH - minH) * CGFloat(progress)
-    }
-
-    var body: some View {
-        HStack(alignment: .bottom, spacing: 10) {
-            ForEach(snapshots) { snapshot in
-                VStack(spacing: 6) {
-                    Text("\(snapshot.score)")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundColor(Color(hex: "66666D"))
-
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(
-                            LinearGradient(
-                                colors: [Color(hex: "FF6B9D"), Color(hex: "FFB4C8")],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            )
-                        )
-                        .frame(width: 20, height: normalizedHeight(for: snapshot.score))
-
-                    Text(shortDate(snapshot.recordedAt))
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundColor(Color(hex: "9A9AA1"))
-                }
-                .frame(maxWidth: .infinity)
-            }
-        }
-        .padding(.vertical, 6)
-    }
-
-    private func shortDate(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "M/d"
-        return formatter.string(from: date)
-    }
-}
-
-struct ZigZagProgressTimeline: View {
-    struct Entry: Identifiable {
-        let id: String
-        let dateText: String
-        let subtitle: String
-        let imageName: String
-        let score: Int
-    }
-
-    let entries: [Entry]
-
-    private let nodeSize: CGFloat = 16
-    private let rowSpacing: CGFloat = 108
-    private let topInset: CGFloat = 18
-
-    private var totalHeight: CGFloat {
-        (topInset * 2) + (CGFloat(max(entries.count - 1, 0)) * rowSpacing)
-    }
-
-    var body: some View {
-        GeometryReader { proxy in
-            let leftX: CGFloat = 28
-            let rightX = max(leftX + 120, proxy.size.width - 28)
-            let cardWidth = min(max(proxy.size.width * 0.62, 190), proxy.size.width - 96)
-            let leftCardX = min(proxy.size.width - (cardWidth / 2) - 8, leftX + (cardWidth / 2) + 28)
-            let rightCardX = max((cardWidth / 2) + 8, rightX - (cardWidth / 2) - 28)
-
-            ZStack(alignment: .topLeading) {
-                zigZagPath(leftX: leftX, rightX: rightX)
-
-                ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
-                    let isLeft = index.isMultiple(of: 2)
-                    let nodeX = isLeft ? leftX : rightX
-                    let cardX = isLeft ? leftCardX : rightCardX
-                    let pointY = topInset + (CGFloat(index) * rowSpacing)
-
-                    timelineNode
-                        .position(x: nodeX, y: pointY)
-
-                    timelineCard(entry: entry, width: cardWidth)
-                        .position(x: cardX, y: pointY)
-                }
-            }
-            .frame(width: proxy.size.width, height: totalHeight, alignment: .topLeading)
-        }
-        .frame(height: max(totalHeight, 120))
-    }
-
-    private var timelineNode: some View {
-        Circle()
-            .fill(Color(hex: "FF6B9D"))
-            .frame(width: nodeSize, height: nodeSize)
-            .overlay(
-                Circle()
-                    .stroke(Color.white, lineWidth: 2)
-            )
-            .shadow(color: Color(hex: "FF6B9D").opacity(0.28), radius: 5, x: 0, y: 2)
-    }
-
-    private func timelineCard(entry: Entry, width: CGFloat) -> some View {
-        HStack(spacing: 10) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 10)
-                    .fill(Color(hex: "F3EEF5"))
-
-                Image(systemName: "photo")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(Color(hex: "A9A2AA"))
-
-                Image(entry.imageName)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-            }
-            .frame(width: 48, height: 48)
-            .clipShape(RoundedRectangle(cornerRadius: 10))
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(entry.dateText)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(Color(hex: "2F2F33"))
-                Text(entry.subtitle)
-                    .font(.system(size: 11))
-                    .foregroundColor(Color(hex: "7D7D85"))
-                    .lineLimit(2)
-            }
-
-            Spacer(minLength: 6)
-
-            Text("\(entry.score)")
-                .font(.system(size: 12, weight: .bold))
-                .foregroundColor(Color(hex: "FF5C95"))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 5)
-                .background(Color(hex: "FFF0F5"))
-                .cornerRadius(9)
-        }
-        .padding(10)
-        .frame(width: width, alignment: .leading)
-        .background(Color(hex: "FAF8FB"))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(Color(hex: "F2E8EF"), lineWidth: 1)
-        )
-        .cornerRadius(12)
-    }
-
-    private func zigZagPath(leftX: CGFloat, rightX: CGFloat) -> some View {
-        Path { path in
-            guard entries.count > 1 else { return }
-
-            func point(for index: Int) -> CGPoint {
-                CGPoint(
-                    x: index.isMultiple(of: 2) ? leftX : rightX,
-                    y: topInset + (CGFloat(index) * rowSpacing)
-                )
-            }
-
-            path.move(to: point(for: 0))
-
-            for index in 1..<entries.count {
-                let previous = point(for: index - 1)
-                let current = point(for: index)
-                let controlOffset: CGFloat = 34
-                path.addCurve(
-                    to: current,
-                    control1: CGPoint(x: previous.x, y: previous.y + controlOffset),
-                    control2: CGPoint(x: current.x, y: current.y - controlOffset)
-                )
-            }
-        }
-        .stroke(
-            LinearGradient(
-                colors: [Color(hex: "FF6B9D").opacity(0.7), Color(hex: "FFB4C8").opacity(0.6)],
-                startPoint: .top,
-                endPoint: .bottom
-            ),
-            style: StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round)
-        )
-    }
-}
-
 struct TimelinePhotoItem: View {
-    let imageName: String
+    let imageURL: String?
     let date: String
     let label: String
     let score: Int
@@ -1993,9 +1917,7 @@ struct TimelinePhotoItem: View {
             .zIndex(1)
             
             VStack(spacing: 8) {
-                Image(imageName)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
+                TimelineRemoteImage(urlString: imageURL)
                     .frame(width: 100, height: 130)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                     .overlay(
@@ -2026,9 +1948,99 @@ struct TimelineConnector: View {
     }
 }
 
+struct TimelineAddItem: View {
+    let isUploading: Bool
+
+    var body: some View {
+        VStack(spacing: 12) {
+            ZStack {
+                Circle()
+                    .fill(Color.white)
+                    .frame(width: 14, height: 14)
+                    .shadow(color: Color.black.opacity(0.1), radius: 2, x: 0, y: 1)
+
+                Circle()
+                    .fill(Color(hex: "FF5C95"))
+                    .frame(width: 8, height: 8)
+            }
+            .zIndex(1)
+
+            VStack(spacing: 8) {
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color.white)
+                    .frame(width: 100, height: 130)
+                    .overlay(
+                        Group {
+                            if isUploading {
+                                ProgressView()
+                                    .tint(Color(hex: "FF5C95"))
+                            } else {
+                                Image(systemName: "plus")
+                                    .font(.system(size: 24, weight: .bold))
+                                    .foregroundColor(Color(hex: "FF5C95"))
+                            }
+                        }
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(Color(hex: "F1D4E0"), style: StrokeStyle(lineWidth: 1.2, dash: [5, 4]))
+                    )
+
+                VStack(spacing: 2) {
+                    Text("Add")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundColor(Color(hex: "2D2D2D"))
+                    Text("Check-in")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(Color(hex: "8A8A92"))
+                }
+            }
+        }
+        .frame(width: 118)
+    }
+}
+
+struct TimelineRemoteImage: View {
+    let urlString: String?
+    
+    var body: some View {
+        Group {
+            if let urlString,
+               let url = URL(string: urlString),
+               !urlString.isEmpty {
+                AsyncImage(url: url) { phase in
+                    switch phase {
+                    case .empty:
+                        placeholder
+                    case .success(let image):
+                        image
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                    case .failure:
+                        placeholder
+                    @unknown default:
+                        placeholder
+                    }
+                }
+            } else {
+                placeholder
+            }
+        }
+    }
+
+    private var placeholder: some View {
+        ZStack {
+            Color(hex: "F2EEF3")
+            Image(systemName: "photo")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundColor(Color(hex: "A9A2AA"))
+        }
+    }
+}
+
 struct BeforeAfterSlider: View {
-    let beforeImage: Image
-    let afterImage: Image
+    let beforeImageURL: String?
+    let afterImageURL: String?
     let beforeLabel: String
     let afterLabel: String
 
@@ -2043,15 +2055,11 @@ struct BeforeAfterSlider: View {
             let sliderX = width * sliderPosition
 
             ZStack(alignment: .leading) {
-                afterImage
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
+                TimelineRemoteImage(urlString: afterImageURL)
                     .frame(width: geometry.size.width, height: geometry.size.height)
                     .clipped()
                 
-                beforeImage
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
+                TimelineRemoteImage(urlString: beforeImageURL)
                     .frame(width: geometry.size.width, height: geometry.size.height)
                     .clipped()
                     .mask(
@@ -2130,6 +2138,6 @@ struct StarryBackground: View {
 
 struct SkinView_Previews: PreviewProvider {
     static var previews: some View {
-        SkinView()
+    SkinView()
     }
 }

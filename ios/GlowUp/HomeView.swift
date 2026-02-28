@@ -45,7 +45,7 @@ class HomeViewModel: ObservableObject {
                 let result = try await APIService.shared.fetchHomeFeed(userId: userId)
                 await MainActor.run {
                     self.feed = result
-                    self.livePickedForYou = result.sections.picked_for_you
+                    self.livePickedForYou = self.personalizedShuffledPickedForYou(from: result, userId: userId)
                     self.pickedForYouTargetCount = max(result.sections.picked_for_you.count, 4)
                     self.isLoading = false
                     self.hasLoaded = true
@@ -189,6 +189,97 @@ class HomeViewModel: ObservableObject {
         }
         let namePrefix = product.name.split(separator: " ").prefix(2).joined(separator: " ")
         return namePrefix.isEmpty ? "looksmax routine" : "\(namePrefix) looksmax"
+    }
+
+    private func personalizedShuffledPickedForYou(from result: HomeFeedResponse, userId: String) -> [FeedProduct] {
+        let targetCount = max(result.sections.picked_for_you.count, 4)
+        let routineTokens = routineKeywords(from: result.routine)
+
+        // Keep model-personalized picks as primary candidates, then blend in other sections.
+        var merged: [FeedProduct] = []
+        merged.append(contentsOf: result.sections.picked_for_you)
+        merged.append(contentsOf: result.sections.trending)
+        merged.append(contentsOf: result.sections.new_arrivals)
+
+        var seen = Set<String>()
+        let unique = merged.filter { product in
+            guard !seen.contains(product.id) else { return false }
+            seen.insert(product.id)
+            return true
+        }
+
+        let scored = unique.map { product in
+            (product: product, score: productTailorScore(product, routineTokens: routineTokens))
+        }
+        .sorted { lhs, rhs in
+            if lhs.score == rhs.score {
+                return lhs.product.name < rhs.product.name
+            }
+            return lhs.score > rhs.score
+        }
+
+        // Preserve the strongest matches, shuffle the remainder daily for freshness.
+        let shortlist = Array(scored.prefix(max(targetCount * 2, targetCount)))
+        let strongHead = Array(shortlist.prefix(min(2, shortlist.count))).map(\.product)
+        let tail = Array(shortlist.dropFirst(strongHead.count)).map(\.product)
+
+        let daySeed = Calendar.current.ordinality(of: .day, in: .year, for: Date()) ?? 1
+        let runtimeSalt = Int(Date().timeIntervalSince1970.rounded())
+        let shuffledTail = deterministicShuffle(
+            tail,
+            seed: stableSeed("\(userId)-\(daySeed)-\(runtimeSalt)-\(result.generated_at ?? "")")
+        )
+        let combined = (strongHead + shuffledTail)
+        return Array(combined.prefix(targetCount))
+    }
+
+    private func productTailorScore(_ product: FeedProduct, routineTokens: Set<String>) -> Double {
+        var score = product.similarity ?? 0.45
+        if let concerns = product.target_concerns, !concerns.isEmpty {
+            score += 0.24
+        }
+        if let skinTypes = product.target_skin_type, !skinTypes.isEmpty {
+            score += 0.12
+        }
+
+        let textBlob = "\(product.name.lowercased()) \(product.category.lowercased()) \((product.description ?? "").lowercased())"
+        let routineMatches = routineTokens.filter { textBlob.contains($0) }.count
+        score += min(Double(routineMatches) * 0.06, 0.24)
+
+        return score
+    }
+
+    private func routineKeywords(from routine: FeedRoutine?) -> Set<String> {
+        guard let routine else { return [] }
+        let steps = (routine.morning ?? []) + (routine.evening ?? []) + (routine.weekly ?? [])
+        let raw = steps.flatMap { step in
+            "\(step.name) \(step.tip ?? "") \(step.product_name ?? "")".lowercased().split(separator: " ").map(String.init)
+        }
+        let stopwords: Set<String> = ["the", "and", "for", "with", "your", "step", "daily", "weekly", "use", "apply", "to", "a", "of", "in"]
+        return Set(raw.filter { $0.count > 3 && !stopwords.contains($0) })
+    }
+
+    private func stableSeed(_ text: String) -> UInt64 {
+        var hash: UInt64 = 1469598103934665603
+        for byte in text.utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* 1099511628211
+        }
+        return hash
+    }
+
+    private func deterministicShuffle<T>(_ input: [T], seed: UInt64) -> [T] {
+        guard input.count > 1 else { return input }
+        var array = input
+        var state = seed == 0 ? 1 : seed
+        for i in stride(from: array.count - 1, through: 1, by: -1) {
+            state = state &* 2862933555777941757 &+ 3037000493
+            let j = Int(state % UInt64(i + 1))
+            if i != j {
+                array.swapAt(i, j)
+            }
+        }
+        return array
     }
 }
 

@@ -568,6 +568,120 @@ class APIService {
         }
         return try JSONDecoder().decode(SharedRoutineFetchResponse.self, from: data)
     }
+
+    // MARK: - Photo Check-ins
+
+    struct PhotoCheckinResponse: Codable {
+        let success: Bool
+        let checkIn: PhotoCheckIn?
+    }
+
+    struct PhotoCheckinsResponse: Codable {
+        let success: Bool
+        let checkIns: [PhotoCheckIn]
+    }
+
+    struct PhotoCheckIn: Codable, Identifiable {
+        struct Analysis: Codable {
+            struct Skin: Codable {
+                let oiliness_score: Double?
+                let hydration_score: Double?
+                let texture_score: Double?
+            }
+
+            let skin: Skin?
+            let analyzed_at: String?
+        }
+
+        let id: String
+        let user_id: String
+        let skin_profile_id: String
+        let photo_front_url: String?
+        let photo_left_url: String?
+        let photo_right_url: String?
+        let image_analysis: Analysis?
+        let user_notes: String?
+        let irritation_reported: Bool?
+        let improvement_reported: Bool?
+        let created_at: String
+    }
+
+    func getPhotoCheckIns(userId: String) async throws -> [PhotoCheckIn] {
+        guard let encodedUserId = userId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+              let url = URL(string: "\(baseURL)/api/photo-check-ins/\(encodedUserId)") else {
+            throw APIError.invalidURL
+        }
+
+        let (data, response) = try await URLSession.shared.data(for: URLRequest(url: url))
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw APIError.serverError
+        }
+        guard httpResponse.statusCode == 200 else {
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let message = json["error"] as? String,
+               !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                throw APIError.serverMessage(message)
+            }
+            throw APIError.serverError
+        }
+
+        return try JSONDecoder().decode(PhotoCheckinsResponse.self, from: data).checkIns
+    }
+
+    func savePhotoCheckIn(
+        userId: String,
+        skinProfileId: String? = nil,
+        photos: [String: String],
+        userNotes: String? = nil,
+        irritation: Bool? = nil,
+        improvement: Bool? = nil
+    ) async throws -> PhotoCheckIn {
+        guard let url = URL(string: "\(baseURL)/api/photo-check-ins") else {
+            throw APIError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 60
+
+        let trimmedUserId = userId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedUserId.isEmpty else { throw APIError.serverMessage("User ID is required.") }
+
+        var body: [String: Any] = [
+            "userId": trimmedUserId,
+            "photos": photos
+        ]
+        if let skinProfileId, !skinProfileId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            body["skinProfileId"] = skinProfileId
+        }
+        if let userNotes, !userNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            body["userNotes"] = userNotes
+        }
+        if let irritation { body["irritation"] = irritation }
+        if let improvement { body["improvement"] = improvement }
+
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw APIError.serverError
+        }
+        guard httpResponse.statusCode == 200 else {
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let message = json["error"] as? String,
+               !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                throw APIError.serverMessage(message)
+            }
+            throw APIError.serverError
+        }
+
+        let decoded = try JSONDecoder().decode(PhotoCheckinResponse.self, from: data)
+        guard let checkIn = decoded.checkIn else {
+            throw APIError.decodingError
+        }
+        return checkIn
+    }
     
     // MARK: - Routine Check-ins
     

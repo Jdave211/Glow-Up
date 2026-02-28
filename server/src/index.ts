@@ -3003,12 +3003,16 @@ app.post('/api/photo-check-ins', async (req, res) => {
   try {
     const { userId, skinProfileId, photos, userNotes, irritation, improvement } = req.body;
     
-    if (!userId || !skinProfileId) {
-      return res.status(400).json({ error: 'User ID and skin profile ID are required' });
+    if (!userId) {
+      return res.status(400).json({ error: 'User ID is required' });
     }
 
     console.log('📸 Saving photo check-in for user:', userId);
     const profile = await DatabaseService.getSkinProfileByUserId(userId);
+    const resolvedSkinProfileId = skinProfileId || profile?.id;
+    if (!resolvedSkinProfileId) {
+      return res.status(400).json({ error: 'Skin profile not found. Complete onboarding first.' });
+    }
     const visualHistoryEnabled = profile?.photo_check_ins !== false;
     const persistedPhotos = await persistIncomingPhotos(userId, photos, 'checkin');
 
@@ -3035,7 +3039,7 @@ app.post('/api/photo-check-ins', async (req, res) => {
       await removePrivatePhotoPaths(persistedPhotos.uploadedPaths);
     }
 
-    const checkIn = await DatabaseService.savePhotoCheckIn(userId, skinProfileId, {
+    const checkIn = await DatabaseService.savePhotoCheckIn(userId, resolvedSkinProfileId, {
       photoFrontUrl: visualHistoryEnabled ? persistedPhotos.stored.front : undefined,
       photoLeftUrl: visualHistoryEnabled ? persistedPhotos.stored.left : undefined,
       photoRightUrl: visualHistoryEnabled ? persistedPhotos.stored.right : undefined,
@@ -4879,6 +4883,8 @@ Progress:
     res.json({
       success: true,
       profile: {
+        id: profile.id || null,
+        user_id: profile.user_id || userId,
         skin_type: profile.skin_type || 'Normal',
         skin_tone: skinToneLabel,
         skin_tone_value: profile.skin_tone || 0.5,

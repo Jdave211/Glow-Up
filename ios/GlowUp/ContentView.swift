@@ -30,11 +30,21 @@ struct ContentView: View {
                         currentUserId = userId
                         resolveSignedInUserLaunchState(userId: userId)
                     } else {
-                        withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) {
-                            currentScreen = .guestChat
-                        }
+                        beginGuestChatFlow()
                     }
                 })
+
+            case .guestConsent:
+                AIDataConsentScreen(
+                    kind: .chat,
+                    onAccept: {
+                        SessionManager.shared.hasAIDataConsent = true
+                        transitionTo(.guestChat)
+                    },
+                    onCancel: {
+                        transitionTo(.onboarding)
+                    }
+                )
                 
             case .guestChat:
                 GuestChatView(onBack: {
@@ -47,26 +57,50 @@ struct ContentView: View {
                 IntakeView(
                     profile: $userProfile,
                     onAnalyze: {
-                        withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) {
-                            currentScreen = .analyzing
-                        }
-                        saveOnboardingAndAnalyze()
+                        beginAnalysisFlow()
                     },
                     onBack: {
                         withAnimation { currentScreen = .onboarding }
                     }
                 )
+
+            case .faceConsent:
+                AIDataConsentScreen(
+                    kind: .faceAnalysis,
+                    onAccept: {
+                        SessionManager.shared.hasAIDataConsent = true
+                        SessionManager.shared.hasFaceAnalysisConsent = true
+                        startAnalyzingFlow()
+                    },
+                    onCancel: {
+                        transitionTo(.intake)
+                    }
+                )
                 
             case .analyzing:
                 AnalyzingView(result: $analysisResult) {
-                    withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) {
+                    transitionTo(.analysisSummary)
+                }
+
+            case .analysisSummary:
+                ResultsView(
+                    result: currentAnalysisResult,
+                    onRestart: {
+                        shouldShowPostOnboardingPaywall = false
+                        transitionTo(.intake)
+                    },
+                    continueButtonTitle: "Open My Glow",
+                    onContinue: {
                         if shouldShowPostOnboardingPaywall && !SubscriptionManager.shared.isPremium {
-                            currentScreen = .miniPaywall
+                            transitionTo(.miniPaywall)
                         } else {
-                            currentScreen = .results
+                            transitionTo(.results)
                         }
                     }
-                }
+                )
+
+            case .results:
+                mainApp
 
             case .miniPaywall:
                 MiniPostOnboardingPaywallView(
@@ -83,9 +117,6 @@ struct ContentView: View {
                         }
                     }
                 )
-                
-            case .results:
-                mainApp
             }
             
             // Loading overlay while checking onboarding
@@ -110,7 +141,16 @@ struct ContentView: View {
     
     @ViewBuilder
     private var mainApp: some View {
-        let result = analysisResult ?? AnalysisResult(
+        MainTabView(analysisResult: currentAnalysisResult, onSignOut: {
+            SessionManager.shared.signOut()
+            withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) {
+                currentScreen = .onboarding
+            }
+        })
+    }
+
+    private var currentAnalysisResult: AnalysisResult {
+        analysisResult ?? AnalysisResult(
             agents: [],
             summary: Summary(
                 totalProducts: 0,
@@ -121,12 +161,6 @@ struct ContentView: View {
             ),
             inference: nil
         )
-        MainTabView(analysisResult: result, onSignOut: {
-            SessionManager.shared.signOut()
-            withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) {
-                currentScreen = .onboarding
-            }
-        })
     }
     
     // MARK: - Session check
@@ -181,6 +215,30 @@ struct ContentView: View {
     }
     
     // MARK: - Onboarding + Analysis
+
+    private func beginGuestChatFlow() {
+        if SessionManager.shared.hasAIDataConsent {
+            transitionTo(.guestChat)
+        } else {
+            transitionTo(.guestConsent)
+        }
+    }
+
+    private func beginAnalysisFlow() {
+        let parsed = userProfile.normalized()
+        userProfile = parsed
+
+        if SessionManager.shared.hasFaceAnalysisConsent {
+            startAnalyzingFlow()
+        } else {
+            transitionTo(.faceConsent)
+        }
+    }
+
+    private func startAnalyzingFlow() {
+        transitionTo(.analyzing)
+        saveOnboardingAndAnalyze()
+    }
     
     private func saveOnboardingAndAnalyze() {
         Task {
@@ -237,9 +295,12 @@ struct ContentView: View {
 enum AppScreen {
     case loading
     case onboarding
+    case guestConsent
     case guestChat
     case intake
+    case faceConsent
     case analyzing
+    case analysisSummary
     case miniPaywall
     case results
 }
@@ -264,6 +325,8 @@ struct GuestChatView: View {
     @State private var inputText = ""
     @State private var isTyping = false
     @State private var scrollTick = 0
+    @State private var pendingMessageAfterConsent: String?
+    @State private var showConsentSheet = false
     @FocusState private var isInputFocused: Bool
 
     private var welcomeMessage: String {
@@ -371,7 +434,7 @@ struct GuestChatView: View {
                             .padding(.horizontal, 16)
                             .padding(.vertical, 12)
 
-                        Button(action: send) {
+                        Button(action: { send() }) {
                             Image(systemName: "arrow.up")
                                 .font(.system(size: 15, weight: .bold))
                                 .foregroundColor(.white)
@@ -409,6 +472,22 @@ struct GuestChatView: View {
                 messages = [GuestChatMessage(role: .assistant, content: welcomeMessage)]
                 scrollTick += 1
             }
+        }
+        .sheet(isPresented: $showConsentSheet) {
+            AIDataConsentScreen(
+                kind: .chat,
+                onAccept: {
+                    SessionManager.shared.hasAIDataConsent = true
+                    showConsentSheet = false
+                    if let pendingMessageAfterConsent {
+                        send(messageOverride: pendingMessageAfterConsent)
+                    }
+                },
+                onCancel: {
+                    pendingMessageAfterConsent = nil
+                    showConsentSheet = false
+                }
+            )
         }
     }
 
@@ -500,9 +579,16 @@ struct GuestChatView: View {
         }
     }
 
-    private func send() {
-        let trimmed = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
+    private func send(messageOverride: String? = nil) {
+        let trimmed = (messageOverride ?? inputText).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !isTyping else { return }
+        guard SessionManager.shared.hasAIDataConsent else {
+            pendingMessageAfterConsent = trimmed
+            showConsentSheet = true
+            return
+        }
+
+        pendingMessageAfterConsent = nil
         inputText = ""
         isInputFocused = false
 
@@ -535,6 +621,162 @@ struct GuestChatView: View {
                         messages.append(GuestChatMessage(role: .assistant, content: fallback))
                     }
                 }
+            }
+        }
+    }
+}
+
+enum AIConsentKind {
+    case chat
+    case faceAnalysis
+
+    var title: String {
+        switch self {
+        case .chat:
+            return "AI Chat Permission"
+        case .faceAnalysis:
+            return "Face Data Permission"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .chat:
+            return "GlowUp needs your permission before sending personal data to third-party AI processing."
+        case .faceAnalysis:
+            return "GlowUp needs explicit permission before analyzing face photos and related skin-profile data."
+        }
+    }
+
+    var primaryButtonTitle: String {
+        switch self {
+        case .chat:
+            return "Allow AI Chat"
+        case .faceAnalysis:
+            return "Allow Face Analysis"
+        }
+    }
+
+    var disclosureItems: [String] {
+        switch self {
+        case .chat:
+            return [
+                "Data sent: your chat message, plus your saved routine and profile context when needed for a reply.",
+                "Recipients: GlowUp's backend, Supabase for conversation storage, and OpenAI for AI-generated responses.",
+                "Storage: GlowUp stores your signed-in chat history so it appears across sessions. Guest mode does not save chat history."
+            ]
+        case .faceAnalysis:
+            return [
+                "Face data sent: the photos you select, your skin-profile answers, and derived face/skin analysis signals.",
+                "Recipients: GlowUp's backend, private Supabase storage for photos, and OpenAI for photo-driven analysis.",
+                "Retention: if Photo Check-ins is on, private photos are retained for up to 90 days for progress tracking; if it is off, uploaded raw photos are deleted after analysis and only derived analysis results remain."
+            ]
+        }
+    }
+}
+
+struct AIDataConsentCard: View {
+    let kind: AIConsentKind
+    let onAccept: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        VStack(spacing: 18) {
+            Circle()
+                .fill(Color(hex: "FFE8F1"))
+                .frame(width: 68, height: 68)
+                .overlay(
+                    Image(systemName: kind == .faceAnalysis ? "faceid" : "sparkles")
+                        .font(.system(size: 28, weight: .semibold))
+                        .foregroundColor(Color(hex: "FF6B9D"))
+                )
+
+            VStack(spacing: 8) {
+                Text(kind.title)
+                    .font(.custom("Didot", size: 30))
+                    .fontWeight(.bold)
+                    .foregroundColor(Color(hex: "2D2D2D"))
+
+                Text(kind.subtitle)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(Color(hex: "666666"))
+                    .multilineTextAlignment(.center)
+            }
+
+            VStack(alignment: .leading, spacing: 12) {
+                ForEach(kind.disclosureItems, id: \.self) { item in
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: "checkmark.shield.fill")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(Color(hex: "FF6B9D"))
+                            .padding(.top, 2)
+
+                        Text(item)
+                            .font(.system(size: 14))
+                            .foregroundColor(Color(hex: "444444"))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+            .padding(18)
+            .background(Color.white)
+            .cornerRadius(18)
+            .overlay(
+                RoundedRectangle(cornerRadius: 18)
+                    .stroke(Color(hex: "F3DDE7"), lineWidth: 1)
+            )
+
+            VStack(spacing: 10) {
+                Button(action: onAccept) {
+                    Text(kind.primaryButtonTitle)
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 16)
+                        .background(Color(hex: "FF6B9D"))
+                        .cornerRadius(16)
+                }
+
+                Button(action: onCancel) {
+                    Text("Not Now")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(Color(hex: "7A7A7A"))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .background(Color.white.opacity(0.85))
+                        .cornerRadius(16)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 16)
+                                .stroke(Color(hex: "E9E1E5"), lineWidth: 1)
+                        )
+                }
+            }
+        }
+        .padding(22)
+        .background(Color(hex: "FFF8FB"))
+        .cornerRadius(28)
+        .shadow(color: Color.black.opacity(0.08), radius: 24, x: 0, y: 10)
+    }
+}
+
+struct AIDataConsentScreen: View {
+    let kind: AIConsentKind
+    let onAccept: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        ZStack {
+            LinearGradient(
+                colors: [Color(hex: "FFF3F7"), Color.white],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea()
+
+            ScrollView(showsIndicators: false) {
+                AIDataConsentCard(kind: kind, onAccept: onAccept, onCancel: onCancel)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 28)
             }
         }
     }

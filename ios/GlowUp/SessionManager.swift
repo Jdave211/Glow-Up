@@ -10,6 +10,8 @@ class SessionManager {
     private let userNameKey = "com.glowup.userName"
     private let isOnboardedKey = "com.glowup.isOnboarded"
     private let isPremiumKey = "com.glowup.isPremium"
+    private let hasAIDataConsentKey = "com.glowup.hasAIDataConsent"
+    private let hasFaceAnalysisConsentKey = "com.glowup.hasFaceAnalysisConsent"
     private let shippingAddressKey = "com.glowup.shippingAddress"
     private let pendingSharedRoutineTokenKey = "com.glowup.pendingSharedRoutineToken"
     private let routineLibraryKeyPrefix = "com.glowup.routineLibrary."
@@ -42,6 +44,16 @@ class SessionManager {
     var isPremium: Bool {
         get { UserDefaults.standard.bool(forKey: isPremiumKey) }
         set { UserDefaults.standard.set(newValue, forKey: isPremiumKey) }
+    }
+
+    var hasAIDataConsent: Bool {
+        get { UserDefaults.standard.bool(forKey: hasAIDataConsentKey) }
+        set { UserDefaults.standard.set(newValue, forKey: hasAIDataConsentKey) }
+    }
+
+    var hasFaceAnalysisConsent: Bool {
+        get { UserDefaults.standard.bool(forKey: hasFaceAnalysisConsentKey) }
+        set { UserDefaults.standard.set(newValue, forKey: hasFaceAnalysisConsentKey) }
     }
     
     var isSignedIn: Bool { userId != nil }

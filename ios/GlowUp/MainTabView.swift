@@ -177,6 +177,8 @@ struct ChatView: View {
     @State private var showDeleteConfirm = false
     @State private var showingProductDetail: InferenceProduct?
     @State private var forceScrollToBottomTick = 0
+    @State private var pendingMessageAfterConsent: String?
+    @State private var showAIConsentSheet = false
     @FocusState private var isInputFocused: Bool
     
     private var userId: String? { SessionManager.shared.userId }
@@ -217,6 +219,22 @@ struct ChatView: View {
         }
         .sheet(item: $showingProductDetail) { product in
             ProductDetailSheet(product: product, cartManager: cartManager, fit: nil, showFullFit: false)
+        }
+        .sheet(isPresented: $showAIConsentSheet) {
+            AIDataConsentScreen(
+                kind: .chat,
+                onAccept: {
+                    SessionManager.shared.hasAIDataConsent = true
+                    showAIConsentSheet = false
+                    if let pendingMessageAfterConsent {
+                        send(messageOverride: pendingMessageAfterConsent)
+                    }
+                },
+                onCancel: {
+                    pendingMessageAfterConsent = nil
+                    showAIConsentSheet = false
+                }
+            )
         }
         .alert("Delete this chat?", isPresented: $showDeleteConfirm) {
             Button("Delete", role: .destructive) {
@@ -420,9 +438,16 @@ struct ChatView: View {
     // MARK: Actions
     // ────────────────────────────────────────
     
-    private func send() {
-        let text = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
+    private func send(messageOverride: String? = nil) {
+        let text = (messageOverride ?? messageText).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
+        guard SessionManager.shared.hasAIDataConsent else {
+            pendingMessageAfterConsent = text
+            showAIConsentSheet = true
+            return
+        }
+
+        pendingMessageAfterConsent = nil
         messageText = ""
         isInputFocused = false
         

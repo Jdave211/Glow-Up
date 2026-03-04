@@ -3,7 +3,21 @@ import SwiftUI
 struct ResultsView: View {
     let result: AnalysisResult
     let onRestart: () -> Void
+    let continueButtonTitle: String?
+    let onContinue: (() -> Void)?
     @State private var selectedTab: RoutineTab = .morning
+
+    init(
+        result: AnalysisResult,
+        onRestart: @escaping () -> Void,
+        continueButtonTitle: String? = nil,
+        onContinue: (() -> Void)? = nil
+    ) {
+        self.result = result
+        self.onRestart = onRestart
+        self.continueButtonTitle = continueButtonTitle
+        self.onContinue = onContinue
+    }
     
     enum RoutineTab: String, CaseIterable {
         case morning = "AM ☀️"
@@ -203,6 +217,18 @@ struct ResultsView: View {
                             .cornerRadius(20)
                             .shadow(color: Color(hex: "FF6B9D").opacity(0.35), radius: 16, x: 0, y: 8)
                     }
+
+                    if let continueButtonTitle, let onContinue {
+                        Button(action: onContinue) {
+                            Text(continueButtonTitle)
+                                .font(.system(size: 16, weight: .bold))
+                                .foregroundColor(.white)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 18)
+                                .background(Color(hex: "2D2D2D"))
+                                .cornerRadius(20)
+                        }
+                    }
                     
                     // Restart button
                     Button(action: onRestart) {
@@ -389,9 +415,6 @@ struct ResultsView_Previews: PreviewProvider {
         )
     }
 }
-
-
-
 
 
 

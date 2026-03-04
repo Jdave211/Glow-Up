@@ -350,6 +350,21 @@ class SupabaseService {
         
         return profile
     }
+
+    /// Load raw skin profile payload when the caller needs server identifiers.
+    func getSkinProfileData(userId: String) async throws -> SkinProfileData? {
+        guard let url = URL(string: "\(baseURL)/api/skin-profiles/\(userId)") else {
+            throw APIError.invalidURL
+        }
+
+        let (data, response) = try await URLSession.shared.data(for: URLRequest(url: url))
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            throw APIError.serverError
+        }
+
+        let resp = try JSONDecoder().decode(SkinProfileResponse.self, from: data)
+        return resp.profile
+    }
     
     // MARK: - Chat Persistence
     

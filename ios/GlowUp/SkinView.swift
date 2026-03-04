@@ -510,6 +510,22 @@ struct SkinView: View {
         }
     }
 
+    private func resolveSkinProfileId(for userId: String) async -> String? {
+        let visibleProfileId = viewModel.profile?.id?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !visibleProfileId.isEmpty {
+            return visibleProfileId
+        }
+
+        if let profile = try? await SupabaseService.shared.getSkinProfileData(userId: userId) {
+            let fetchedProfileId = profile.id.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !fetchedProfileId.isEmpty {
+                return fetchedProfileId
+            }
+        }
+
+        return nil
+    }
+
     private func uploadTimelineCheckIn(from item: PhotosPickerItem) async {
         guard let userId = resolvedUserId else {
             await MainActor.run {
@@ -533,9 +549,13 @@ struct SkinView: View {
                 throw APIError.serverMessage("Couldn't read the selected photo.")
             }
 
+            guard let skinProfileId = await resolveSkinProfileId(for: userId) else {
+                throw APIError.serverMessage("Finish onboarding before adding progress photos.")
+            }
+
             _ = try await APIService.shared.savePhotoCheckIn(
                 userId: userId,
-                skinProfileId: viewModel.profile?.id,
+                skinProfileId: skinProfileId,
                 photos: ["front": payload]
             )
 
@@ -552,7 +572,12 @@ struct SkinView: View {
                 selectedTimelinePhotoItem = nil
                 isUploadingTimelinePhoto = false
                 timelineStatusIsError = true
-                timelineStatusMessage = error.localizedDescription
+                let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                if message.localizedCaseInsensitiveContains("user id") || message.localizedCaseInsensitiveContains("skin profile") {
+                    timelineStatusMessage = "Finish onboarding once, then try adding the progress photo again."
+                } else {
+                    timelineStatusMessage = message
+                }
             }
         }
     }

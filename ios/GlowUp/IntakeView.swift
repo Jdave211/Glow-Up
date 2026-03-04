@@ -285,7 +285,7 @@ struct PhotoUploadStep: View {
                 Image(systemName: "lock.shield.fill")
                     .font(.system(size: 13))
                     .foregroundColor(Color(hex: "4ADE80"))
-                Text("Your photos are used to personalize recommendations. You can opt out anytime.")
+                Text("Your photos are used for face/skin analysis. We ask permission before sending them for AI processing, and photo storage depends on your Photo Check-ins setting.")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundColor(Color(hex: "666666"))
             }

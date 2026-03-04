@@ -18,6 +18,48 @@ private let premiumFeatures: [PaywallFeature] = [
     .init(icon: "chart.line.uptrend.xyaxis", title: "Progress Tracking", subtitle: "See improvement")
 ]
 
+private extension SubscriptionManager.Plan {
+    var marketingName: String {
+        switch self {
+        case .weekly: return "GlowUp+ Weekly"
+        case .monthly: return "GlowUp+ Monthly"
+        }
+    }
+
+    var durationLabel: String {
+        switch self {
+        case .weekly: return "1 week"
+        case .monthly: return "1 month"
+        }
+    }
+}
+
+private struct SubscriptionDisclosureBlock: View {
+    let plan: SubscriptionManager.Plan
+    let price: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("\(plan.marketingName): \(price) for \(plan.durationLabel).")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(Color(hex: "4B5563"))
+
+            Text("Auto-renews unless canceled at least 24 hours before the current period ends. Manage subscriptions in your App Store account settings.")
+                .font(.system(size: 11))
+                .foregroundColor(Color(hex: "6B7280"))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(Color(hex: "F8FAFC"))
+        .cornerRadius(12)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color(hex: "E5E7EB"), lineWidth: 1)
+        )
+    }
+}
+
 struct PremiumPaywallView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
@@ -163,6 +205,11 @@ struct PremiumPaywallView: View {
                             .shadow(color: Color(hex: "FF5C95").opacity(0.4), radius: 8, x: 0, y: 4)
                         }
                         .disabled(subscriptionManager.purchaseInProgress || subscriptionManager.isLoadingProducts)
+
+                        SubscriptionDisclosureBlock(
+                            plan: selectedPlan,
+                            price: subscriptionManager.displayPrice(for: selectedPlan)
+                        )
                         
                         // Footer
                         HStack(spacing: 16) {
@@ -347,6 +394,12 @@ struct MiniPostOnboardingPaywallView: View {
                     .shadow(color: Color(hex: "FF5C95").opacity(0.3), radius: 8, x: 0, y: 4)
                 }
                 .disabled(subscriptionManager.purchaseInProgress || subscriptionManager.isLoadingProducts)
+                .padding(.horizontal, 20)
+
+                SubscriptionDisclosureBlock(
+                    plan: selectedPlan,
+                    price: subscriptionManager.displayPrice(for: selectedPlan)
+                )
                 .padding(.horizontal, 20)
 
                 HStack(spacing: 20) {

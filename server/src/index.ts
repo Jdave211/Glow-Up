@@ -627,6 +627,9 @@ app.post('/api/analyze', async (req, res) => {
     if (useLLM) {
       // New inference with RAG (LLM if available, fallback otherwise)
       console.log(`🧠 Using inference engine... (LLM: ${isLLMAvailable() ? 'enabled' : 'fallback mode'})`);
+      if (userId) {
+        await redactExpiredProfileFaceData(userId);
+      }
       const savedSkinProfile = userId ? await DatabaseService.getSkinProfileByUserId(userId) : null;
       const profileConcerns = Array.isArray(profile.concerns) ? profile.concerns : [];
       const imageSignalConcerns = deriveConcernSignalsFromImageAnalysis(savedSkinProfile?.image_analysis);
@@ -2504,6 +2507,8 @@ async function redactExpiredCheckInPhotos(userId: string) {
       photo_front_url: null,
       photo_left_url: null,
       photo_right_url: null,
+      image_analysis: null,
+      comparison_to_baseline: null,
     })
     .in('id', rowIds);
 
@@ -2511,6 +2516,47 @@ async function redactExpiredCheckInPhotos(userId: string) {
     console.error('⚠️ Failed to redact expired check-in photo refs:', updateError.message);
   } else {
     console.log(`🧹 Redacted photo refs for ${rowIds.length} expired check-ins`);
+  }
+}
+
+async function redactExpiredProfileFaceData(userId: string) {
+  if (!PHOTO_RETENTION_DAYS || PHOTO_RETENTION_DAYS <= 0) return;
+  const cutoff = new Date(Date.now() - PHOTO_RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
+
+  const { data, error } = await supabase
+    .from('skin_profiles')
+    .select('id, last_analysis_at, photo_front_url, photo_left_url, photo_right_url, photo_scalp_url')
+    .eq('user_id', userId)
+    .single();
+
+  if (error || !data?.id || !data.last_analysis_at || data.last_analysis_at >= cutoff) return;
+
+  const pathsToDelete = [
+    data.photo_front_url,
+    data.photo_left_url,
+    data.photo_right_url,
+    data.photo_scalp_url,
+  ].filter((ref): ref is string => Boolean(ref) && isStoragePathRef(ref));
+
+  await removePrivatePhotoPaths(pathsToDelete);
+
+  const { error: updateError } = await supabase
+    .from('skin_profiles')
+    .update({
+      photo_front_url: null,
+      photo_left_url: null,
+      photo_right_url: null,
+      photo_scalp_url: null,
+      image_analysis: null,
+      analysis_confidence: null,
+      last_analysis_at: null,
+    })
+    .eq('id', data.id);
+
+  if (updateError) {
+    console.error('⚠️ Failed to redact expired profile face data:', updateError.message);
+  } else {
+    console.log(`🧹 Redacted expired profile face data for user ${userId}`);
   }
 }
 
@@ -2942,6 +2988,7 @@ app.post('/api/skin-profiles', async (req, res) => {
 // Get skin profile
 app.get('/api/skin-profiles/:userId', async (req, res) => {
   try {
+    await redactExpiredProfileFaceData(req.params.userId);
     const profile = await DatabaseService.getSkinProfileByUserId(req.params.userId);
     if (profile) {
       const profileWithSignedPhotos = await withSignedProfilePhotos(profile);
@@ -4633,6 +4680,9 @@ app.get('/api/skin-page/:userId', async (req, res) => {
   console.log(`✨ Skin page request for user: ${userId}`);
 
   try {
+    await redactExpiredProfileFaceData(userId);
+    await redactExpiredCheckInPhotos(userId);
+
     // ── 1. Fetch all user data in parallel ──
     const [profile, latestRoutineRow, latestInsightRow, streaks, checkins] = await Promise.all([
       DatabaseService.getSkinProfileByUserId(userId),

@@ -544,6 +544,9 @@ app.post('/api/analyze', async (req, res) => {
         if (useLLM) {
             // New inference with RAG (LLM if available, fallback otherwise)
             console.log(`🧠 Using inference engine... (LLM: ${(0, inference_1.isLLMAvailable)() ? 'enabled' : 'fallback mode'})`);
+            if (userId) {
+                await redactExpiredProfileFaceData(userId);
+            }
             const savedSkinProfile = userId ? await supabase_1.DatabaseService.getSkinProfileByUserId(userId) : null;
             const profileConcerns = Array.isArray(profile.concerns) ? profile.concerns : [];
             const imageSignalConcerns = deriveConcernSignalsFromImageAnalysis(savedSkinProfile?.image_analysis);
@@ -2248,6 +2251,8 @@ async function redactExpiredCheckInPhotos(userId) {
         photo_front_url: null,
         photo_left_url: null,
         photo_right_url: null,
+        image_analysis: null,
+        comparison_to_baseline: null,
     })
         .in('id', rowIds);
     if (updateError) {
@@ -2255,6 +2260,43 @@ async function redactExpiredCheckInPhotos(userId) {
     }
     else {
         console.log(`🧹 Redacted photo refs for ${rowIds.length} expired check-ins`);
+    }
+}
+async function redactExpiredProfileFaceData(userId) {
+    if (!PHOTO_RETENTION_DAYS || PHOTO_RETENTION_DAYS <= 0)
+        return;
+    const cutoff = new Date(Date.now() - PHOTO_RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
+    const { data, error } = await supabase_1.supabase
+        .from('skin_profiles')
+        .select('id, last_analysis_at, photo_front_url, photo_left_url, photo_right_url, photo_scalp_url')
+        .eq('user_id', userId)
+        .single();
+    if (error || !data?.id || !data.last_analysis_at || data.last_analysis_at >= cutoff)
+        return;
+    const pathsToDelete = [
+        data.photo_front_url,
+        data.photo_left_url,
+        data.photo_right_url,
+        data.photo_scalp_url,
+    ].filter((ref) => Boolean(ref) && isStoragePathRef(ref));
+    await removePrivatePhotoPaths(pathsToDelete);
+    const { error: updateError } = await supabase_1.supabase
+        .from('skin_profiles')
+        .update({
+        photo_front_url: null,
+        photo_left_url: null,
+        photo_right_url: null,
+        photo_scalp_url: null,
+        image_analysis: null,
+        analysis_confidence: null,
+        last_analysis_at: null,
+    })
+        .eq('id', data.id);
+    if (updateError) {
+        console.error('⚠️ Failed to redact expired profile face data:', updateError.message);
+    }
+    else {
+        console.log(`🧹 Redacted expired profile face data for user ${userId}`);
     }
 }
 function toLevelLabel(score) {
@@ -2635,6 +2677,7 @@ app.post('/api/skin-profiles', async (req, res) => {
 // Get skin profile
 app.get('/api/skin-profiles/:userId', async (req, res) => {
     try {
+        await redactExpiredProfileFaceData(req.params.userId);
         const profile = await supabase_1.DatabaseService.getSkinProfileByUserId(req.params.userId);
         if (profile) {
             const profileWithSignedPhotos = await withSignedProfilePhotos(profile);
@@ -2691,11 +2734,15 @@ app.post('/api/skin-profiles/:userId/analyze', async (req, res) => {
 app.post('/api/photo-check-ins', async (req, res) => {
     try {
         const { userId, skinProfileId, photos, userNotes, irritation, improvement } = req.body;
-        if (!userId || !skinProfileId) {
-            return res.status(400).json({ error: 'User ID and skin profile ID are required' });
+        if (!userId) {
+            return res.status(400).json({ error: 'User ID is required' });
         }
         console.log('📸 Saving photo check-in for user:', userId);
         const profile = await supabase_1.DatabaseService.getSkinProfileByUserId(userId);
+        const resolvedSkinProfileId = skinProfileId || profile?.id;
+        if (!resolvedSkinProfileId) {
+            return res.status(400).json({ error: 'Skin profile not found. Complete onboarding first.' });
+        }
         const visualHistoryEnabled = profile?.photo_check_ins !== false;
         const persistedPhotos = await persistIncomingPhotos(userId, photos, 'checkin');
         // Analyze new photos
@@ -2717,7 +2764,7 @@ app.post('/api/photo-check-ins', async (req, res) => {
         if (!visualHistoryEnabled && persistedPhotos.uploadedPaths.length > 0) {
             await removePrivatePhotoPaths(persistedPhotos.uploadedPaths);
         }
-        const checkIn = await supabase_1.DatabaseService.savePhotoCheckIn(userId, skinProfileId, {
+        const checkIn = await supabase_1.DatabaseService.savePhotoCheckIn(userId, resolvedSkinProfileId, {
             photoFrontUrl: visualHistoryEnabled ? persistedPhotos.stored.front : undefined,
             photoLeftUrl: visualHistoryEnabled ? persistedPhotos.stored.left : undefined,
             photoRightUrl: visualHistoryEnabled ? persistedPhotos.stored.right : undefined,
@@ -4205,6 +4252,8 @@ app.get('/api/skin-page/:userId', async (req, res) => {
     const forceRefresh = req.query.refresh === 'true';
     console.log(`✨ Skin page request for user: ${userId}`);
     try {
+        await redactExpiredProfileFaceData(userId);
+        await redactExpiredCheckInPhotos(userId);
         // ── 1. Fetch all user data in parallel ──
         const [profile, latestRoutineRow, latestInsightRow, streaks, checkins] = await Promise.all([
             supabase_1.DatabaseService.getSkinProfileByUserId(userId),
@@ -4441,6 +4490,8 @@ Progress:
         res.json({
             success: true,
             profile: {
+                id: profile.id || null,
+                user_id: profile.user_id || userId,
                 skin_type: profile.skin_type || 'Normal',
                 skin_tone: skinToneLabel,
                 skin_tone_value: profile.skin_tone || 0.5,

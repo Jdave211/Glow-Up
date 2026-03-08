@@ -4,10 +4,13 @@ import AuthenticationServices
 /// Manages user session persistence
 class SessionManager {
     static let shared = SessionManager()
+    // Temporary release gate for App Review: disables routine share/import flows.
+    static let isRoutineSharingEnabled = false
     
     private let userIdKey = "com.glowup.userId"
     private let userEmailKey = "com.glowup.userEmail"
     private let userNameKey = "com.glowup.userName"
+    private let skinProfileIdKey = "com.glowup.skinProfileId"
     private let isOnboardedKey = "com.glowup.isOnboarded"
     private let isPremiumKey = "com.glowup.isPremium"
     private let hasAIDataConsentKey = "com.glowup.hasAIDataConsent"
@@ -33,6 +36,11 @@ class SessionManager {
     var userName: String? {
         get { UserDefaults.standard.string(forKey: userNameKey) }
         set { UserDefaults.standard.set(newValue, forKey: userNameKey) }
+    }
+
+    var skinProfileId: String? {
+        get { UserDefaults.standard.string(forKey: skinProfileIdKey) }
+        set { UserDefaults.standard.set(newValue, forKey: skinProfileIdKey) }
     }
     
     var isOnboarded: Bool {
@@ -62,6 +70,7 @@ class SessionManager {
         userId = nil
         userEmail = nil
         userName = nil
+        skinProfileId = nil
         isOnboarded = false
         // Do not clear premium here; StoreKit entitlement is Apple ID scoped.
         shippingAddress = nil
@@ -74,6 +83,9 @@ class SessionManager {
     }
     
     func saveUser(_ user: SupabaseUser) {
+        if let previousUserId = userId, previousUserId != user.id {
+            skinProfileId = nil
+        }
         userId = user.id
         userEmail = user.email
         userName = user.name

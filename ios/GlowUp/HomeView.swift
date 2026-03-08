@@ -289,6 +289,7 @@ class HomeViewModel: ObservableObject {
 
 struct HomeView: View {
     @ObservedObject var cartManager: CartManager
+    let fallbackAnalysisResult: AnalysisResult?
     @StateObject private var viewModel = HomeViewModel()
     @State private var showingProductDetail: InferenceProduct?
     @State private var showingRoutineDetail: RoutineType?
@@ -349,27 +350,31 @@ struct HomeView: View {
                     // Dynamic feed from fine-tuned model
                     feedContent
                 } else if let error = viewModel.errorMessage {
-                    // Error state with retry
-                    VStack(spacing: 20) {
-                        Spacer().frame(height: 40)
-                        Image(systemName: "sparkles")
-                            .font(.system(size: 40))
-                            .foregroundColor(Color(hex: "FFB4C8"))
-                        Text(error)
-                            .font(.system(size: 15, weight: .medium))
-                            .foregroundColor(Color(hex: "888888"))
-                            .multilineTextAlignment(.center)
-                        Button(action: { viewModel.loadFeed(force: true) }) {
-                            Text("Try Again")
-                                .font(.system(size: 15, weight: .semibold))
-                                .foregroundColor(.white)
-                                .padding(.horizontal, 28)
-                                .padding(.vertical, 12)
-                                .background(Color(hex: "FF6B9D"))
-                                .cornerRadius(20)
+                    if hasAnalysisFallbackContent {
+                        analysisFallbackContent(error: error)
+                    } else {
+                        // Error state with retry
+                        VStack(spacing: 20) {
+                            Spacer().frame(height: 40)
+                            Image(systemName: "sparkles")
+                                .font(.system(size: 40))
+                                .foregroundColor(Color(hex: "FFB4C8"))
+                            Text(error)
+                                .font(.system(size: 15, weight: .medium))
+                                .foregroundColor(Color(hex: "888888"))
+                                .multilineTextAlignment(.center)
+                            Button(action: { viewModel.loadFeed(force: true) }) {
+                                Text("Try Again")
+                                    .font(.system(size: 15, weight: .semibold))
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 28)
+                                    .padding(.vertical, 12)
+                                    .background(Color(hex: "FF6B9D"))
+                                    .cornerRadius(20)
+                            }
                         }
+                        .padding(.horizontal, 20)
                     }
-                    .padding(.horizontal, 20)
                 }
                 
                 Spacer(minLength: 100)
@@ -413,6 +418,110 @@ struct HomeView: View {
                     viewModel.refresh()
                 }
             )
+        }
+    }
+
+    private var fallbackRoutineSummary: RoutineSummary? {
+        fallbackAnalysisResult?.summary.routine ?? fallbackAnalysisResult?.inference?.routine
+    }
+
+    private var fallbackTips: [String] {
+        let fromSummary = fallbackAnalysisResult?.summary.personalized_tips ?? []
+        let fromInference = fallbackAnalysisResult?.inference?.personalized_tips ?? []
+        let source = fromSummary.isEmpty ? fromInference : fromSummary
+        return Array(source.prefix(4))
+    }
+
+    private var hasAnalysisFallbackContent: Bool {
+        let routine = fallbackRoutineSummary
+        let hasRoutine =
+            !(routine?.morning?.isEmpty ?? true) ||
+            !(routine?.evening?.isEmpty ?? true) ||
+            !(routine?.weekly?.isEmpty ?? true)
+        return hasRoutine || !fallbackTips.isEmpty
+    }
+
+    @ViewBuilder
+    private func analysisFallbackContent(error: String) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Live feed is temporarily unavailable")
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundColor(Color(hex: "2D2D2D"))
+                Text(error)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(Color(hex: "7A7A7A"))
+                Text("Using your latest analysis so you can continue.")
+                    .font(.system(size: 13))
+                    .foregroundColor(Color(hex: "8A8A92"))
+            }
+            .padding(16)
+            .background(Color.white.opacity(0.85))
+            .cornerRadius(16)
+
+            if let routine = fallbackRoutineSummary {
+                fallbackRoutineSection(title: "Morning", steps: routine.morning)
+                fallbackRoutineSection(title: "Evening", steps: routine.evening)
+                fallbackRoutineSection(title: "Weekly", steps: routine.weekly)
+            }
+
+            if !fallbackTips.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Tips From Your Analysis")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundColor(Color(hex: "3A3A3A"))
+                    ForEach(Array(fallbackTips.enumerated()), id: \.offset) { _, tip in
+                        Text("• \(tip)")
+                            .font(.system(size: 13))
+                            .foregroundColor(Color(hex: "666666"))
+                    }
+                }
+                .padding(14)
+                .background(Color.white.opacity(0.85))
+                .cornerRadius(14)
+            }
+
+            Button(action: { viewModel.loadFeed(force: true) }) {
+                Text("Try Reloading Live Feed")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(Color(hex: "FF6B9D"))
+                    .cornerRadius(14)
+            }
+        }
+        .padding(.horizontal, 20)
+    }
+
+    @ViewBuilder
+    private func fallbackRoutineSection(title: String, steps: [RoutineStep]?) -> some View {
+        let safeSteps = Array((steps ?? []).prefix(3))
+        if !safeSteps.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("\(title) Routine")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundColor(Color(hex: "3A3A3A"))
+                ForEach(safeSteps) { step in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("\(step.step). \(step.name)")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(Color(hex: "2D2D2D"))
+                        if !step.instructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            Text(step.instructions)
+                                .font(.system(size: 12))
+                                .foregroundColor(Color(hex: "666666"))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .padding(10)
+                    .background(Color.white.opacity(0.8))
+                    .cornerRadius(10)
+                }
+            }
+            .padding(14)
+            .background(Color.white.opacity(0.85))
+            .cornerRadius(14)
         }
     }
     
@@ -1655,6 +1764,7 @@ struct RoutineDetailSheet: View {
     @State private var showingStepEditor = false
     @State private var editingStepLocalId: String?
     @State private var editorDraft = EditableRoutineStep.blank(step: 1, frequency: "daily")
+    private let routineSharingEnabled = SessionManager.isRoutineSharingEnabled
     
     private var routineTypeStr: String {
         switch routineType {
@@ -1881,13 +1991,15 @@ struct RoutineDetailSheet: View {
                 ActivityShareSheet(items: shareItems)
             }
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button(action: prepareShare) {
-                        Image(systemName: "square.and.arrow.up")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundColor(isPreparingShare ? Color(hex: "AAAAAA") : Color(hex: "666666"))
+                if routineSharingEnabled {
+                    ToolbarItem(placement: .navigationBarLeading) {
+                        Button(action: prepareShare) {
+                            Image(systemName: "square.and.arrow.up")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundColor(isPreparingShare ? Color(hex: "AAAAAA") : Color(hex: "666666"))
+                        }
+                        .disabled(isPreparingShare)
                     }
-                    .disabled(isPreparingShare)
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button(action: {
@@ -2073,6 +2185,7 @@ struct RoutineDetailSheet: View {
     }
 
     private func prepareShare() {
+        guard routineSharingEnabled else { return }
         guard !userId.isEmpty else { return }
         isPreparingShare = true
         shareError = nil
@@ -2878,7 +2991,8 @@ struct RoutineSocialShareCard: View {
 struct HomeView_Previews: PreviewProvider {
     static var previews: some View {
         HomeView(
-            cartManager: CartManager()
+            cartManager: CartManager(),
+            fallbackAnalysisResult: nil
         )
     }
 }

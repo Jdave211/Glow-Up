@@ -81,14 +81,16 @@ struct IntakeView: View {
                         VStack(alignment: .leading, spacing: 24) {
                             Color.clear.frame(height: 1).id("top")
 
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text(stepTitles[currentStep])
-                                    .font(.custom("Didot", size: 28))
-                                    .fontWeight(.bold)
-                                    .foregroundColor(Color(hex: "2D2D2D"))
-                                Text(stepSubtitles[currentStep])
-                                    .font(.system(size: 14))
-                                    .foregroundColor(Color(hex: "888888"))
+                            if currentStep != 0 {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text(stepTitles[currentStep])
+                                        .font(.custom("Didot", size: 28))
+                                        .fontWeight(.bold)
+                                        .foregroundColor(Color(hex: "2D2D2D"))
+                                    Text(stepSubtitles[currentStep])
+                                        .font(.system(size: 14))
+                                        .foregroundColor(Color(hex: "888888"))
+                                }
                             }
                             
                             switch currentStep {

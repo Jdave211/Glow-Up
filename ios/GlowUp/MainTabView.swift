@@ -31,7 +31,7 @@ struct MainTabView: View {
             // Page content - conditional views instead of TabView
             switch selectedTab {
             case .home:
-                HomeView(cartManager: cartManager)
+                HomeView(cartManager: cartManager, fallbackAnalysisResult: analysisResult)
             case .chat:
                 ChatView(analysisResult: analysisResult, cartManager: cartManager, chatSession: chatSession)
             case .skin:
@@ -59,6 +59,7 @@ struct MainTabView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .glowUpOpenRoutineImport)) { _ in
+            guard SessionManager.isRoutineSharingEnabled else { return }
             withAnimation(.easeInOut(duration: 0.15)) {
                 selectedTab = .skin
             }

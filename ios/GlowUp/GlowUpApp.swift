@@ -22,6 +22,7 @@ struct GlowUpApp: App {
     }
 
     private func handleIncomingURL(_ url: URL) {
+        guard SessionManager.isRoutineSharingEnabled else { return }
         guard let token = extractSharedRoutineToken(from: url) else { return }
         SessionManager.shared.queueSharedRoutineToken(token)
         NotificationCenter.default.post(
@@ -82,7 +83,6 @@ final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
         completionHandler()
     }
 }
-
 
 
 

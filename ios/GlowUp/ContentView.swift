@@ -5,7 +5,6 @@ struct ContentView: View {
     @State private var userProfile = UserProfile()
     @State private var analysisResult: AnalysisResult?
     @State private var currentUserId: String?
-    @State private var skinProfileId: String?
     @State private var isCheckingOnboarding = false
     @State private var shouldShowPostOnboardingPaywall = false
     
@@ -247,7 +246,10 @@ struct ContentView: View {
                     let parsed = userProfile.normalized()
                     await MainActor.run { self.userProfile = parsed }
                     let savedProfile = try await SupabaseService.shared.saveSkinProfile(userId: userId, profile: parsed)
-                    skinProfileId = savedProfile?.id
+                    let savedProfileId = savedProfile?.id.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    if !savedProfileId.isEmpty {
+                        SessionManager.shared.skinProfileId = savedProfileId
+                    }
                 }
                 
                 let parsed = userProfile.normalized()

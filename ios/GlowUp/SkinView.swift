@@ -25,7 +25,14 @@ final class SkinPageViewModel: ObservableObject {
     }
     
     func load(userId: String?, forceRefresh: Bool = false) {
-        guard let userId, !isLoading else { return }
+        guard !isLoading else { return }
+        guard let userId = userId?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !userId.isEmpty else {
+            page = nil
+            error = "Sign in to load your skin profile."
+            isLoading = false
+            return
+        }
         isLoading = true
         error = nil
         
@@ -40,12 +47,22 @@ final class SkinPageViewModel: ObservableObject {
                        !fallbackUserId.isEmpty {
                         SessionManager.shared.userId = fallbackUserId
                     }
+                    if let profileId = result.profile.id?.trimmingCharacters(in: .whitespacesAndNewlines),
+                       !profileId.isEmpty {
+                        SessionManager.shared.skinProfileId = profileId
+                    }
                     self.isLoading = false
                 }
             } catch {
                 await MainActor.run {
                     self.isLoading = false
-                    self.error = "Couldn't load your profile"
+                    let nsError = error as NSError
+                    if nsError.domain == NSURLErrorDomain,
+                       nsError.code == NSURLErrorTimedOut {
+                        self.error = "Loading timed out. Please try again."
+                    } else {
+                        self.error = "Couldn't load your profile"
+                    }
                 }
             }
         }
@@ -132,6 +149,7 @@ struct SkinView: View {
     @State private var timelineStatusMessage: String?
     @State private var timelineStatusIsError = false
     @State private var selectedTimelinePhotoItem: PhotosPickerItem?
+    private let routineSharingEnabled = SessionManager.isRoutineSharingEnabled
     
     enum SkinTab: String, CaseIterable {
         case progress = "Progress"
@@ -397,7 +415,7 @@ struct SkinView: View {
             return AnyView(errorState)
             }
 
-        return AnyView(EmptyView())
+        return AnyView(errorState)
     }
 
     private var selectedTabContent: AnyView {
@@ -421,7 +439,9 @@ struct SkinView: View {
             viewModel.load(userId: SessionManager.shared.userId)
         }
         routineLibrary = SessionManager.shared.routineLibrary
-        consumePendingSharedRoutineTokenIfNeeded()
+        if routineSharingEnabled {
+            consumePendingSharedRoutineTokenIfNeeded()
+        }
         Task {
             await loadPhotoCheckIns()
         }
@@ -443,6 +463,7 @@ struct SkinView: View {
     }
 
     private func handleRoutineImportNotification(_ note: Notification) {
+        guard routineSharingEnabled else { return }
         if let token = note.userInfo?["token"] as? String, !token.isEmpty {
             importSharedRoutine(token: token)
         } else {
@@ -511,14 +532,21 @@ struct SkinView: View {
     }
 
     private func resolveSkinProfileId(for userId: String) async -> String? {
+        let cachedProfileId = SessionManager.shared.skinProfileId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !cachedProfileId.isEmpty {
+            return cachedProfileId
+        }
+
         let visibleProfileId = viewModel.profile?.id?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !visibleProfileId.isEmpty {
+            SessionManager.shared.skinProfileId = visibleProfileId
             return visibleProfileId
         }
 
         if let profile = try? await SupabaseService.shared.getSkinProfileData(userId: userId) {
             let fetchedProfileId = profile.id.trimmingCharacters(in: .whitespacesAndNewlines)
             if !fetchedProfileId.isEmpty {
+                SessionManager.shared.skinProfileId = fetchedProfileId
                 return fetchedProfileId
             }
         }
@@ -654,6 +682,13 @@ struct SkinView: View {
                             )
                     )
             }
+            Text("Loading your skin dashboard...")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundColor(Color(hex: "8A8A92"))
+            Text("If this takes too long, return to Home and try again.")
+                .font(.system(size: 12))
+                .foregroundColor(Color(hex: "A5A5AD"))
+                .multilineTextAlignment(.center)
         }
         .padding(.horizontal, 20)
         .padding(.top, 40)
@@ -775,7 +810,9 @@ struct SkinView: View {
     // MARK: - Routine Content
     private var routineContent: some View {
         VStack(spacing: 18) {
-            routineKeyImportSection
+            if routineSharingEnabled {
+                routineKeyImportSection
+            }
 
             if let shareError {
                 Text(shareError)
@@ -974,15 +1011,17 @@ struct SkinView: View {
                     .background(isEvening ? Color.white.opacity(0.2) : Color(hex: "F5F5F7"))
                     .cornerRadius(8)
 
-                Button(action: { prepareRoutineShare(routineType: routineType, fallbackTitle: title, fallbackSteps: steps) }) {
-                    Image(systemName: "square.and.arrow.up")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundColor(isPreparingShare ? (isEvening ? Color.white.opacity(0.3) : Color(hex: "B5B5B5")) : (isEvening ? Color.white.opacity(0.8) : Color(hex: "6D6D73")))
-                        .padding(7)
-                        .background(isEvening ? Color.white.opacity(0.1) : Color(hex: "F3F3F6"))
-                        .clipShape(Circle())
+                if routineSharingEnabled {
+                    Button(action: { prepareRoutineShare(routineType: routineType, fallbackTitle: title, fallbackSteps: steps) }) {
+                        Image(systemName: "square.and.arrow.up")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(isPreparingShare ? (isEvening ? Color.white.opacity(0.3) : Color(hex: "B5B5B5")) : (isEvening ? Color.white.opacity(0.8) : Color(hex: "6D6D73")))
+                            .padding(7)
+                            .background(isEvening ? Color.white.opacity(0.1) : Color(hex: "F3F3F6"))
+                            .clipShape(Circle())
+                    }
+                    .disabled(isPreparingShare)
                 }
-                .disabled(isPreparingShare)
 
                 Button(action: {
                     routineEditorType = routineType == "morning" ? .morning : .evening
@@ -1556,6 +1595,11 @@ struct SkinView: View {
     }
 
     private func importRoutineUsingTypedKey() {
+        guard routineSharingEnabled else {
+            libraryStatusIsError = true
+            libraryStatusMessage = "Routine sharing is temporarily unavailable."
+            return
+        }
         let key = normalizedTypedRoutineKey
         guard key.count >= 6 else {
             libraryStatusIsError = true
@@ -1631,12 +1675,14 @@ struct SkinView: View {
     }
 
     private func consumePendingSharedRoutineTokenIfNeeded() {
+        guard routineSharingEnabled else { return }
         guard let token = SessionManager.shared.consumePendingSharedRoutineToken(),
               !token.isEmpty else { return }
         importSharedRoutine(token: token)
     }
 
     private func importSharedRoutine(token: String) {
+        guard routineSharingEnabled else { return }
         guard !token.isEmpty else { return }
         guard !isImportingSharedRoutine else { return }
         isImportingSharedRoutine = true
@@ -1733,6 +1779,10 @@ struct SkinView: View {
     }
 
     private func prepareRoutineShare(routineType: String?, fallbackTitle: String, fallbackSteps: [SkinPageRoutineStep]) {
+        guard routineSharingEnabled else {
+            shareError = "Routine sharing is temporarily unavailable."
+            return
+        }
         guard let userId = SessionManager.shared.userId else { return }
         isPreparingShare = true
         shareError = nil

@@ -149,6 +149,7 @@ struct SkinView: View {
     @State private var timelineStatusMessage: String?
     @State private var timelineStatusIsError = false
     @State private var selectedTimelinePhotoItem: PhotosPickerItem?
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     private let routineSharingEnabled = SessionManager.isRoutineSharingEnabled
     
     enum SkinTab: String, CaseIterable {
@@ -161,6 +162,10 @@ struct SkinView: View {
         if value < 0.35 { return "white" }
         if value < 0.70 { return "lightskin_black" }
         return "black"
+    }
+
+    private var contentMaxWidth: CGFloat {
+        horizontalSizeClass == .regular ? 860 : .infinity
     }
     
     var body: some View {
@@ -327,58 +332,64 @@ struct SkinView: View {
                         }
                     }
 
-                VStack(spacing: 12) {
-                    HStack {
-                        Spacer()
-                        Button {
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                self.selectedTimelinePhoto = nil
+                GeometryReader { proxy in
+                    let modalWidth = min(max(proxy.size.width - 40, 280), 620)
+                    let imageHeight = min(420, max(250, proxy.size.height * 0.5))
+
+                    VStack(spacing: 12) {
+                        HStack {
+                            Spacer()
+                            Button {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    self.selectedTimelinePhoto = nil
+                                }
+                            } label: {
+                                Image(systemName: "xmark")
+                                    .font(.system(size: 13, weight: .bold))
+                                    .foregroundColor(Color(hex: "666666"))
+                                    .padding(10)
+                                    .background(Color.white.opacity(0.9))
+                                    .clipShape(Circle())
                             }
-                        } label: {
-                            Image(systemName: "xmark")
-                                .font(.system(size: 13, weight: .bold))
-                                .foregroundColor(Color(hex: "666666"))
-                                .padding(10)
-                                .background(Color.white.opacity(0.9))
-                                .clipShape(Circle())
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
-                    }
 
-                    TimelineRemoteImage(urlString: selectedTimelinePhoto.imageURL)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 420)
-                        .clipShape(RoundedRectangle(cornerRadius: 18))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 18)
-                                .stroke(Color.white.opacity(0.8), lineWidth: 1)
-                        )
+                        TimelineRemoteImage(urlString: selectedTimelinePhoto.imageURL)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: imageHeight)
+                            .clipShape(RoundedRectangle(cornerRadius: 18))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 18)
+                                    .stroke(Color.white.opacity(0.8), lineWidth: 1)
+                            )
 
-                    HStack(spacing: 8) {
-                        Text(selectedTimelinePhoto.label)
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundColor(Color(hex: "454545"))
-                        Text("•")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundColor(Color(hex: "9A9A9A"))
-                        Text(selectedTimelinePhoto.date)
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundColor(Color(hex: "8A8A92"))
-                        Spacer()
-                        Text("Score \(selectedTimelinePhoto.score)")
-                            .font(.system(size: 12, weight: .bold))
-                            .foregroundColor(Color(hex: "FF5C95"))
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .background(Color(hex: "FFF0F5"))
-                            .cornerRadius(10)
+                        HStack(spacing: 8) {
+                            Text(selectedTimelinePhoto.label)
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundColor(Color(hex: "454545"))
+                            Text("•")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundColor(Color(hex: "9A9A9A"))
+                            Text(selectedTimelinePhoto.date)
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundColor(Color(hex: "8A8A92"))
+                            Spacer()
+                            Text("Score \(selectedTimelinePhoto.score)")
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundColor(Color(hex: "FF5C95"))
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(Color(hex: "FFF0F5"))
+                                .cornerRadius(10)
+                        }
                     }
+                    .padding(16)
+                    .frame(width: modalWidth)
+                    .background(Color(hex: "FCFBFD").opacity(0.95))
+                    .cornerRadius(20)
+                    .shadow(color: Color.black.opacity(0.16), radius: 26, x: 0, y: 12)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                .padding(16)
-                .background(Color(hex: "FCFBFD").opacity(0.95))
-                .cornerRadius(20)
-                .padding(.horizontal, 20)
-                .shadow(color: Color.black.opacity(0.16), radius: 26, x: 0, y: 12)
             }
             .transition(.opacity.combined(with: .scale(scale: 0.98)))
             .zIndex(3)
@@ -393,6 +404,8 @@ struct SkinView: View {
                 Spacer().frame(height: 120)
             }
             .padding(.top, 16)
+            .frame(maxWidth: contentMaxWidth)
+            .frame(maxWidth: .infinity)
         }
     }
 

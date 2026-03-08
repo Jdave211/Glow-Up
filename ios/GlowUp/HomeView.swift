@@ -290,6 +290,7 @@ class HomeViewModel: ObservableObject {
 struct HomeView: View {
     @ObservedObject var cartManager: CartManager
     let fallbackAnalysisResult: AnalysisResult?
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @StateObject private var viewModel = HomeViewModel()
     @State private var showingProductDetail: InferenceProduct?
     @State private var showingRoutineDetail: RoutineType?
@@ -331,6 +332,10 @@ struct HomeView: View {
         let lettersOnly = seed.filter { $0.isLetter || $0 == "-" || $0 == "'" }
         guard !lettersOnly.isEmpty else { return "" }
         return lettersOnly.prefix(1).uppercased() + lettersOnly.dropFirst().lowercased()
+    }
+
+    private var contentMaxWidth: CGFloat {
+        horizontalSizeClass == .regular ? 860 : .infinity
     }
     
     private var greetingWithName: String {
@@ -380,6 +385,8 @@ struct HomeView: View {
                 Spacer(minLength: 100)
             }
             .padding(.top, 12)
+            .frame(maxWidth: contentMaxWidth)
+            .frame(maxWidth: .infinity)
         }
         .refreshable {
             viewModel.refresh()

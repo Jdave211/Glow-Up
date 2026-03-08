@@ -6,6 +6,7 @@ struct MainTabView: View {
     let analysisResult: AnalysisResult
     var onSignOut: (() -> Void)?
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var selectedTab: Tab = .home
     @StateObject private var cartManager = CartManager()
     @StateObject private var chatSession = ChatSession()
@@ -24,6 +25,10 @@ struct MainTabView: View {
             case .settings: return "gearshape.fill"
             }
         }
+    }
+
+    private var tabBarMaxWidth: CGFloat {
+        horizontalSizeClass == .regular ? 700 : .infinity
     }
     
     var body: some View {
@@ -147,6 +152,9 @@ struct MainTabView: View {
                     .buttonStyle(.plain)
                 }
             }
+            .frame(maxWidth: tabBarMaxWidth)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, horizontalSizeClass == .regular ? 12 : 0)
             .padding(.top, 8)
             .padding(.bottom, 8)
         }
@@ -172,6 +180,7 @@ struct ChatView: View {
     let analysisResult: AnalysisResult
     @ObservedObject var cartManager: CartManager
     @ObservedObject var chatSession: ChatSession
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     
     @State private var messageText = ""
     @State private var showHistory = false
@@ -184,6 +193,9 @@ struct ChatView: View {
     
     private var userId: String? { SessionManager.shared.userId }
     var isEmpty: Bool { chatSession.currentChat.isEmpty }
+    private var contentMaxWidth: CGFloat {
+        horizontalSizeClass == .regular ? 820 : .infinity
+    }
     
     var body: some View {
         ZStack {
@@ -204,6 +216,8 @@ struct ChatView: View {
                 
                 inputBar
             }
+            .frame(maxWidth: contentMaxWidth)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
         .onAppear { loadConversations() }
         .sheet(isPresented: $showHistory) {
@@ -1335,6 +1349,7 @@ struct SettingsView: View {
     private let supportURL = URL(string: "https://boiled-education-5d3.notion.site/GlowUp-Support-b4226f97acba41e3bd4803fa1d0624fb?source=copy_link")!
 
     var onSignOut: (() -> Void)?
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.openURL) private var openURL
     @AppStorage("glowup.notifications.enabled") private var notificationsEnabled = true
     @AppStorage("glowup.notifications.routine") private var routineReminders = true
@@ -1348,6 +1363,10 @@ struct SettingsView: View {
     @State private var showPaywall = false
     @State private var showNotificationAlert = false
     @State private var notificationAlertMessage = ""
+
+    private var contentMaxWidth: CGFloat {
+        horizontalSizeClass == .regular ? 820 : .infinity
+    }
     
     var body: some View {
         ScrollView(showsIndicators: false) {
@@ -1620,6 +1639,8 @@ struct SettingsView: View {
                 Spacer(minLength: 120)
             }
             .padding(.top, 20)
+            .frame(maxWidth: contentMaxWidth)
+            .frame(maxWidth: .infinity)
         }
         .background(PinkDrapeBackground().ignoresSafeArea())
         .onAppear {

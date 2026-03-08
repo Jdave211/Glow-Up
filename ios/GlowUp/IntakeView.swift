@@ -5,6 +5,7 @@ struct IntakeView: View {
     @Binding var profile: UserProfile
     let onAnalyze: () -> Void
     let onBack: () -> Void
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     
     @State private var currentStep = 0
     @State private var scrollID = UUID()
@@ -22,6 +23,9 @@ struct IntakeView: View {
         "Tell us what to prioritize first. Skin leads, teeth/hair support.",
         "Set reminders and final preferences."
     ]
+    private var contentMaxWidth: CGFloat {
+        horizontalSizeClass == .regular ? 760 : .infinity
+    }
     
     var body: some View {
         ZStack {
@@ -157,6 +161,8 @@ struct IntakeView: View {
                     .background(Color.white)
                 }
             }
+            .frame(maxWidth: contentMaxWidth)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
     }
 }

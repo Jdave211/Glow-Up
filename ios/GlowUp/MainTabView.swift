@@ -1703,6 +1703,9 @@ struct SettingsView: View {
         .background(PinkDrapeBackground().ignoresSafeArea())
         .onAppear {
             configureNotificationsOnLaunch()
+            Task {
+                await subscriptionManager.refreshEntitlements()
+            }
         }
         .onChange(of: notificationsEnabled) { _, _ in
             handleNotificationToggle()

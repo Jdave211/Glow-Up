@@ -201,6 +201,7 @@ final class SubscriptionManager: ObservableObject {
         var activeSnapshot: ActiveSubscriptionSnapshot?
         let validProductIds = Set(candidateProductIds + [weeklyProduct?.id, monthlyProduct?.id].compactMap { $0 })
 
+        // Check StoreKit entitlements
         for await verificationResult in Transaction.currentEntitlements {
             guard let transaction = try? checkVerified(verificationResult) else { continue }
             guard validProductIds.contains(transaction.productID) else { continue }
@@ -223,10 +224,33 @@ final class SubscriptionManager: ObservableObject {
             }
         }
 
-        let hasActivePremium = activeSnapshot != nil
+        var hasActivePremium = activeSnapshot != nil
+        
+        // Also check backend subscription status (for promotional access, server-side verification, etc.)
+        if !hasActivePremium, let userId = SessionManager.shared.userId {
+            do {
+                if let backendStatus = try await SupabaseService.shared.getUserSubscriptionStatus(userId: userId) {
+                    if backendStatus.isPremium {
+                        hasActivePremium = true
+                        #if DEBUG
+                        print("✅ Premium status from backend: \(backendStatus.status), plan: \(backendStatus.plan ?? "unknown")")
+                        #endif
+                    }
+                }
+            } catch {
+                #if DEBUG
+                print("⚠️ Failed to check backend subscription status: \(error.localizedDescription)")
+                #endif
+            }
+        }
+        
         isPremium = hasActivePremium
         SessionManager.shared.isPremium = hasActivePremium
-        syncSubscriptionStateToBackend(snapshot: activeSnapshot, isPremium: hasActivePremium)
+        
+        // Only sync to backend if we have a StoreKit entitlement (avoid overwriting backend-granted premium)
+        if activeSnapshot != nil {
+            syncSubscriptionStateToBackend(snapshot: activeSnapshot, isPremium: hasActivePremium)
+        }
     }
 
     private func product(for plan: Plan) -> StoreKit.Product? {

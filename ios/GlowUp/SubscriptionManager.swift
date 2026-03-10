@@ -331,6 +331,7 @@ final class SubscriptionManager: ObservableObject {
             isPremium: isPremium,
             plan: snapshot?.plan?.rawValue,
             productId: snapshot?.productId,
+            startedAt: snapshot.map { formatter.string(from: $0.purchaseDate) },
             expiresAt: snapshot?.expiresAt.map { formatter.string(from: $0) },
             lastVerifiedAt: formatter.string(from: Date()),
             transactionId: snapshot?.transactionId,
@@ -338,25 +339,24 @@ final class SubscriptionManager: ObservableObject {
             environment: nil
         )
 
-        Task.detached(priority: .utility) { [weak self] in
-            let didSync: Bool = await {
-                do {
-                    return try await SupabaseService.shared.syncUserSubscriptionStatus(userId: userId, payload: payload)
-                } catch {
-                    #if DEBUG
-                    print("⚠️ Subscription sync failed:", error.localizedDescription)
-                    #endif
-                    return false
-                }
-            }()
+        Task(priority: .utility) { [userId, signature, payload] in
+            let didSync: Bool
+            do {
+                didSync = try await SupabaseService.shared.syncUserSubscriptionStatus(userId: userId, payload: payload)
+            } catch {
+                #if DEBUG
+                print("⚠️ Subscription sync failed:", error.localizedDescription)
+                #endif
+                didSync = false
+            }
 
             await MainActor.run {
-                guard let self else { return }
+                let manager = SubscriptionManager.shared
                 if didSync {
-                    self.lastSyncedSubscriptionSignature = signature
+                    manager.lastSyncedSubscriptionSignature = signature
                 }
-                if self.subscriptionSyncInFlightSignature == signature {
-                    self.subscriptionSyncInFlightSignature = nil
+                if manager.subscriptionSyncInFlightSignature == signature {
+                    manager.subscriptionSyncInFlightSignature = nil
                 }
             }
         }

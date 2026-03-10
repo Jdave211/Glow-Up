@@ -68,8 +68,19 @@ struct PremiumPaywallView: View {
     @Environment(\.openURL) private var openURL
     @ObservedObject private var subscriptionManager = SubscriptionManager.shared
     
+    let isDismissible: Bool
+    let onUpgradeSuccess: (() -> Void)?
+    
     @State private var selectedPlan: SubscriptionManager.Plan = .monthly
     @State private var skinTone: Double?
+
+    init(
+        isDismissible: Bool = true,
+        onUpgradeSuccess: (() -> Void)? = nil
+    ) {
+        self.isDismissible = isDismissible
+        self.onUpgradeSuccess = onUpgradeSuccess
+    }
     
     private var ctaTitle: String {
         if subscriptionManager.purchaseInProgress || subscriptionManager.isLoadingProducts {
@@ -169,7 +180,7 @@ struct PremiumPaywallView: View {
                             Task {
                                 let success = await subscriptionManager.purchase(plan: selectedPlan)
                                 if success {
-                                    dismiss()
+                                    handleUnlockSuccess()
                                 }
                             }
                         }) {
@@ -204,7 +215,7 @@ struct PremiumPaywallView: View {
                                 Task {
                                     await subscriptionManager.restorePurchases()
                                     if subscriptionManager.isPremium {
-                                        dismiss()
+                                        handleUnlockSuccess()
                                     }
                                 }
                             }
@@ -231,31 +242,45 @@ struct PremiumPaywallView: View {
                 }
                 .ignoresSafeArea(edges: .top)
 
-                Button(action: { dismiss() }) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundColor(.white)
-                        .padding(9)
-                        .background(.ultraThinMaterial)
-                        .clipShape(Circle())
+                if isDismissible {
+                    Button(action: { dismiss() }) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundColor(.white)
+                            .padding(9)
+                            .background(.ultraThinMaterial)
+                            .clipShape(Circle())
+                    }
+                    .padding(.top, max(14, proxy.safeAreaInsets.top + 8))
+                    .padding(.trailing, 20)
                 }
-                .padding(.top, max(14, proxy.safeAreaInsets.top + 8))
-                .padding(.trailing, 20)
             }
         }
         .onChange(of: subscriptionManager.isPremium) { _, isPremium in
             if isPremium {
-                dismiss()
+                handleUnlockSuccess()
             }
         }
+        .interactiveDismissDisabled(!isDismissible)
         .task {
             await subscriptionManager.loadProducts()
             await subscriptionManager.refreshEntitlements()
+            if subscriptionManager.isPremium {
+                handleUnlockSuccess()
+                return
+            }
             if let userId = SessionManager.shared.userId {
                 if let profile = try? await SupabaseService.shared.getSkinProfile(userId: userId) {
                     self.skinTone = profile.skinTone
                 }
             }
+        }
+    }
+
+    private func handleUnlockSuccess() {
+        onUpgradeSuccess?()
+        if isDismissible {
+            dismiss()
         }
     }
 

@@ -15,6 +15,22 @@ export interface DbUser {
     subscription_environment?: string | null;
     created_at: string;
 }
+export interface DbSubscription {
+    id: string;
+    user_id: string;
+    subscription_active: boolean;
+    subscription_status: string;
+    subscription_type?: string | null;
+    subscription_started_at?: string | null;
+    subscription_expires_at?: string | null;
+    subscription_product_id?: string | null;
+    subscription_last_verified_at?: string | null;
+    subscription_transaction_id?: string | null;
+    subscription_original_transaction_id?: string | null;
+    subscription_environment?: string | null;
+    created_at: string;
+    updated_at: string;
+}
 export interface DbProfile {
     id: string;
     user_id: string;
@@ -124,11 +140,47 @@ export interface DbPhotoCheckIn {
     improvement_reported?: boolean;
     created_at: string;
 }
+export interface UserSubscriptionStatusSnapshot {
+    isPremium: boolean;
+    subscriptionActive: boolean;
+    status: string;
+    plan: string | null;
+    productId: string | null;
+    startedAt: string | null;
+    expiresAt: string | null;
+    secondsRemaining: number;
+    daysRemaining: number;
+    lastVerifiedAt: string | null;
+    transactionId: string | null;
+    originalTransactionId: string | null;
+    environment: string | null;
+}
+export interface SubscriptionStatusUpdatePayload {
+    isPremium: boolean;
+    plan?: string | null;
+    productId?: string | null;
+    startedAt?: string | null;
+    expiresAt?: string | null;
+    lastVerifiedAt?: string | null;
+    transactionId?: string | null;
+    originalTransactionId?: string | null;
+    environment?: string | null;
+}
 export declare class DatabaseService {
     private static readonly ROUTINE_KEY_ALPHABET;
     private static isIgnorableMissingTableError;
     private static isMissingColumnError;
+    private static isNoRowsError;
     private static isStoragePathRef;
+    private static parseDate;
+    private static normalizeTimestamp;
+    private static normalizePlan;
+    private static deriveExpiresAt;
+    private static computeTimeRemaining;
+    private static defaultSubscriptionStatus;
+    private static normalizeSubscriptionStatusRow;
+    private static loadSubscriptionFromSubscriptionsTable;
+    private static loadSubscriptionFromUsersTable;
     static normalizeRoutineKey(input: string | null | undefined): string | null;
     static extractRoutineKey(routineData: any): string | null;
     private static generateRoutineKeyCandidate;
@@ -142,27 +194,8 @@ export declare class DatabaseService {
     static deleteUserAccount(userId: string): Promise<boolean>;
     static markUserOnboarded(userId: string): Promise<boolean>;
     static isUserOnboarded(userId: string): Promise<boolean>;
-    static getUserSubscriptionStatus(userId: string): Promise<{
-        isPremium: boolean;
-        status: string;
-        plan: string | null;
-        productId: string | null;
-        expiresAt: string | null;
-        lastVerifiedAt: string | null;
-        transactionId: string | null;
-        originalTransactionId: string | null;
-        environment: string | null;
-    } | null>;
-    static updateUserSubscriptionStatus(userId: string, payload: {
-        isPremium: boolean;
-        plan?: string | null;
-        productId?: string | null;
-        expiresAt?: string | null;
-        lastVerifiedAt?: string | null;
-        transactionId?: string | null;
-        originalTransactionId?: string | null;
-        environment?: string | null;
-    }): Promise<boolean>;
+    static getUserSubscriptionStatus(userId: string): Promise<UserSubscriptionStatusSnapshot | null>;
+    static updateUserSubscriptionStatus(userId: string, payload: SubscriptionStatusUpdatePayload): Promise<boolean>;
     static saveProfile(userId: string, profile: {
         skinType: string;
         skinTone?: number;

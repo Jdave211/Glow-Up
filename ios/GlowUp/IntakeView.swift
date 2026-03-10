@@ -762,12 +762,7 @@ struct SkinBasicsStep: View {
     @State private var customSkinType = ""
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 28) {
-            QuestionHeader(
-                title: "Skin Basics",
-                subtitle: "Let's understand your skin better."
-            )
-            
+        VStack(alignment: .leading, spacing: 24) {
             // Q1: Skin Type
             VStack(alignment: .leading, spacing: 14) {
                 Text("How would you describe your skin?")
@@ -956,12 +951,7 @@ struct SkinGoalsStep: View {
     ]
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 28) {
-            QuestionHeader(
-                title: "Looks Goals",
-                subtitle: "Skin-first, then smile and hairline touch-ups."
-            )
-            
+        VStack(alignment: .leading, spacing: 24) {
             // Skin Goals Grid
             VStack(alignment: .leading, spacing: 14) {
                 Text("I'm working towards...")
@@ -1096,12 +1086,7 @@ struct RemindersStep: View {
     @Binding var profile: UserProfile
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 28) {
-            QuestionHeader(
-                title: "Final Touches",
-                subtitle: "Budget and how we can help you stay on track."
-            )
-            
+        VStack(alignment: .leading, spacing: 24) {
             // Budget
             VStack(alignment: .leading, spacing: 14) {
                 Text("Monthly beauty budget")

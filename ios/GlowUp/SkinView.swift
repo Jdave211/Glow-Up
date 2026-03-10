@@ -128,6 +128,7 @@ struct SkinView: View {
 
     @StateObject private var viewModel = SkinPageViewModel()
     @State private var selectedTab: SkinTab = .progress
+    @State private var hasAppliedInitialTab = false
     @State private var showPaywall = false
     @State private var routineEditorType: HomeView.RoutineType?
     @State private var routineStreaks: (morning: Int, evening: Int) = (0, 0)
@@ -153,10 +154,15 @@ struct SkinView: View {
     @State private var isDeletingPhoto = false
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     private let routineSharingEnabled = SessionManager.isRoutineSharingEnabled
+    private let initialTab: SkinTab?
     
     enum SkinTab: String, CaseIterable {
         case progress = "Progress"
         case routine = "My Routine"
+    }
+
+    init(initialTab: SkinTab? = nil) {
+        self.initialTab = initialTab
     }
     
     private var skinToneBackgroundImageName: String {
@@ -475,6 +481,12 @@ struct SkinView: View {
     }
 
     private func handleOnAppear() {
+        if !hasAppliedInitialTab {
+            if let initialTab {
+                selectedTab = initialTab
+            }
+            hasAppliedInitialTab = true
+        }
         if viewModel.page == nil {
             viewModel.load(userId: SessionManager.shared.userId)
         }

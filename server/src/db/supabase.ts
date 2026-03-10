@@ -40,6 +40,23 @@ export interface DbUser {
   created_at: string;
 }
 
+export interface DbSubscription {
+  id: string;
+  user_id: string;
+  subscription_active: boolean;
+  subscription_status: string;
+  subscription_type?: string | null;
+  subscription_started_at?: string | null;
+  subscription_expires_at?: string | null;
+  subscription_product_id?: string | null;
+  subscription_last_verified_at?: string | null;
+  subscription_transaction_id?: string | null;
+  subscription_original_transaction_id?: string | null;
+  subscription_environment?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface DbProfile {
   id: string;
   user_id: string;
@@ -168,6 +185,34 @@ export interface DbPhotoCheckIn {
   created_at: string;
 }
 
+export interface UserSubscriptionStatusSnapshot {
+  isPremium: boolean;
+  subscriptionActive: boolean;
+  status: string;
+  plan: string | null;
+  productId: string | null;
+  startedAt: string | null;
+  expiresAt: string | null;
+  secondsRemaining: number;
+  daysRemaining: number;
+  lastVerifiedAt: string | null;
+  transactionId: string | null;
+  originalTransactionId: string | null;
+  environment: string | null;
+}
+
+export interface SubscriptionStatusUpdatePayload {
+  isPremium: boolean;
+  plan?: string | null;
+  productId?: string | null;
+  startedAt?: string | null;
+  expiresAt?: string | null;
+  lastVerifiedAt?: string | null;
+  transactionId?: string | null;
+  originalTransactionId?: string | null;
+  environment?: string | null;
+}
+
 // Database service functions
 export class DatabaseService {
   private static readonly ROUTINE_KEY_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -185,9 +230,194 @@ export class DatabaseService {
     return code === '42703' || code === 'PGRST204' || (message.includes('column') && message.includes('does not exist'));
   }
 
+  private static isNoRowsError(error: unknown): boolean {
+    if (!error || typeof error !== 'object') return false;
+    const code = (error as { code?: string }).code;
+    const message = String((error as { message?: string }).message ?? '').toLowerCase();
+    return code === 'PGRST116' || message.includes('no rows');
+  }
+
   private static isStoragePathRef(ref: unknown): ref is string {
     if (typeof ref !== 'string' || !ref) return false;
     return !ref.startsWith('http://') && !ref.startsWith('https://') && !ref.startsWith('data:');
+  }
+
+  private static parseDate(value: string | null | undefined): Date | null {
+    if (!value) return null;
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+
+  private static normalizeTimestamp(value: string | null | undefined): string | null {
+    return this.parseDate(value)?.toISOString() ?? null;
+  }
+
+  private static normalizePlan(plan: string | null | undefined): string | null {
+    const normalized = String(plan ?? '').trim().toLowerCase();
+    if (!normalized) return null;
+    if (normalized.includes('week')) return 'weekly';
+    if (normalized.includes('month')) return 'monthly';
+    return null;
+  }
+
+  private static deriveExpiresAt(
+    isPremium: boolean,
+    plan: string | null,
+    startedAtISO: string | null,
+    providedExpiresAtISO: string | null
+  ): string | null {
+    if (!isPremium) return null;
+
+    const providedExpiry = this.normalizeTimestamp(providedExpiresAtISO);
+    if (providedExpiry) return providedExpiry;
+    if (!plan) return null;
+
+    const start = this.parseDate(startedAtISO) ?? new Date();
+    const expiry = new Date(start);
+    if (plan === 'weekly') {
+      expiry.setUTCDate(expiry.getUTCDate() + 7);
+    } else if (plan === 'monthly') {
+      expiry.setUTCMonth(expiry.getUTCMonth() + 1);
+    } else {
+      return null;
+    }
+    return expiry.toISOString();
+  }
+
+  private static computeTimeRemaining(expiresAtISO: string | null): { secondsRemaining: number; daysRemaining: number } {
+    const expiresAt = this.parseDate(expiresAtISO);
+    if (!expiresAt) {
+      return { secondsRemaining: 0, daysRemaining: 0 };
+    }
+    const diffMs = expiresAt.getTime() - Date.now();
+    if (diffMs <= 0) {
+      return { secondsRemaining: 0, daysRemaining: 0 };
+    }
+    const secondsRemaining = Math.floor(diffMs / 1000);
+    const daysRemaining = Math.ceil(secondsRemaining / 86400);
+    return { secondsRemaining, daysRemaining };
+  }
+
+  private static defaultSubscriptionStatus(): UserSubscriptionStatusSnapshot {
+    return {
+      isPremium: false,
+      subscriptionActive: false,
+      status: 'inactive',
+      plan: null,
+      productId: null,
+      startedAt: null,
+      expiresAt: null,
+      secondsRemaining: 0,
+      daysRemaining: 0,
+      lastVerifiedAt: null,
+      transactionId: null,
+      originalTransactionId: null,
+      environment: null,
+    };
+  }
+
+  private static normalizeSubscriptionStatusRow(
+    row: Record<string, unknown>,
+    source: 'subscriptions' | 'users'
+  ): UserSubscriptionStatusSnapshot {
+    const statusField = source === 'subscriptions' ? 'subscription_status' : 'subscription_status';
+    const planField = source === 'subscriptions' ? 'subscription_type' : 'subscription_plan';
+    const productField = source === 'subscriptions' ? 'subscription_product_id' : 'subscription_product_id';
+    const startedField = source === 'subscriptions' ? 'subscription_started_at' : 'subscription_last_verified_at';
+    const expiresField = source === 'subscriptions' ? 'subscription_expires_at' : 'subscription_expires_at';
+    const verifiedField = source === 'subscriptions' ? 'subscription_last_verified_at' : 'subscription_last_verified_at';
+    const transactionField = source === 'subscriptions' ? 'subscription_transaction_id' : 'subscription_transaction_id';
+    const originalTransactionField = source === 'subscriptions' ? 'subscription_original_transaction_id' : 'subscription_original_transaction_id';
+    const environmentField = source === 'subscriptions' ? 'subscription_environment' : 'subscription_environment';
+
+    const rawStatus = String(row[statusField] ?? 'inactive').trim().toLowerCase() || 'inactive';
+    const plan = this.normalizePlan(typeof row[planField] === 'string' ? row[planField] as string : null);
+    const startedAt = this.normalizeTimestamp(typeof row[startedField] === 'string' ? row[startedField] as string : null);
+    const expiresAt = this.normalizeTimestamp(typeof row[expiresField] === 'string' ? row[expiresField] as string : null);
+    const notExpired = !expiresAt || (this.parseDate(expiresAt)?.getTime() ?? 0) > Date.now();
+    const subscriptionActiveFlag = source === 'subscriptions'
+      ? row.subscription_active === true
+      : rawStatus === 'active';
+    const isPremium = subscriptionActiveFlag && notExpired;
+    const normalizedStatus = isPremium ? 'active' : 'inactive';
+    const remaining = this.computeTimeRemaining(expiresAt);
+
+    return {
+      isPremium,
+      subscriptionActive: isPremium,
+      status: normalizedStatus,
+      plan,
+      productId: typeof row[productField] === 'string' ? row[productField] as string : null,
+      startedAt,
+      expiresAt,
+      secondsRemaining: remaining.secondsRemaining,
+      daysRemaining: remaining.daysRemaining,
+      lastVerifiedAt: this.normalizeTimestamp(typeof row[verifiedField] === 'string' ? row[verifiedField] as string : null),
+      transactionId: typeof row[transactionField] === 'string' ? row[transactionField] as string : null,
+      originalTransactionId: typeof row[originalTransactionField] === 'string' ? row[originalTransactionField] as string : null,
+      environment: typeof row[environmentField] === 'string' ? row[environmentField] as string : null,
+    };
+  }
+
+  private static async loadSubscriptionFromSubscriptionsTable(userId: string): Promise<UserSubscriptionStatusSnapshot | null> {
+    const { data, error } = await supabase
+      .from('subscriptions')
+      .select(
+        [
+          'subscription_active',
+          'subscription_status',
+          'subscription_type',
+          'subscription_started_at',
+          'subscription_expires_at',
+          'subscription_product_id',
+          'subscription_last_verified_at',
+          'subscription_transaction_id',
+          'subscription_original_transaction_id',
+          'subscription_environment',
+        ].join(', ')
+      )
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    if (error) {
+      if (this.isIgnorableMissingTableError(error) || this.isNoRowsError(error)) {
+        return null;
+      }
+      console.error('Error loading subscription record:', error);
+      return null;
+    }
+    if (!data) return null;
+    return this.normalizeSubscriptionStatusRow(data as unknown as Record<string, unknown>, 'subscriptions');
+  }
+
+  private static async loadSubscriptionFromUsersTable(userId: string): Promise<UserSubscriptionStatusSnapshot | null> {
+    const { data, error } = await supabase
+      .from('users')
+      .select(
+        [
+          'subscription_status',
+          'subscription_plan',
+          'subscription_product_id',
+          'subscription_expires_at',
+          'subscription_last_verified_at',
+          'subscription_transaction_id',
+          'subscription_original_transaction_id',
+          'subscription_environment',
+        ].join(', ')
+      )
+      .eq('id', userId)
+      .maybeSingle();
+
+    if (error) {
+      if (this.isMissingColumnError(error) || this.isNoRowsError(error)) {
+        return null;
+      }
+      console.error('Error loading user subscription status:', error);
+      return null;
+    }
+
+    if (!data) return null;
+    return this.normalizeSubscriptionStatusRow(data as unknown as Record<string, unknown>, 'users');
   }
 
   static normalizeRoutineKey(input: string | null | undefined): string | null {
@@ -329,6 +559,7 @@ export class DatabaseService {
 
   static async deleteUserAccount(userId: string): Promise<boolean> {
     const tableDeletes: Array<{ table: string; column: string }> = [
+      { table: 'subscriptions', column: 'user_id' },
       { table: 'routine_checkins', column: 'user_id' },
       { table: 'routine_streaks', column: 'user_id' },
       { table: 'skin_insights', column: 'user_id' },
@@ -425,115 +656,133 @@ export class DatabaseService {
     return data?.onboarded === true;
   }
 
-  static async getUserSubscriptionStatus(userId: string): Promise<{
-    isPremium: boolean;
-    status: string;
-    plan: string | null;
-    productId: string | null;
-    expiresAt: string | null;
-    lastVerifiedAt: string | null;
-    transactionId: string | null;
-    originalTransactionId: string | null;
-    environment: string | null;
-  } | null> {
-    const { data, error } = await supabase
-      .from('users')
-      .select(
-        [
-          'subscription_status',
-          'subscription_plan',
-          'subscription_product_id',
-          'subscription_expires_at',
-          'subscription_last_verified_at',
-          'subscription_transaction_id',
-          'subscription_original_transaction_id',
-          'subscription_environment',
-        ].join(', ')
-      )
-      .eq('id', userId)
-      .single();
-
-    if (error) {
-      if (this.isMissingColumnError(error)) {
-        return {
-          isPremium: false,
-          status: 'inactive',
-          plan: null,
-          productId: null,
-          expiresAt: null,
-          lastVerifiedAt: null,
-          transactionId: null,
-          originalTransactionId: null,
-          environment: null,
-        };
-      }
-      console.error('Error loading user subscription status:', error);
-      return null;
+  static async getUserSubscriptionStatus(userId: string): Promise<UserSubscriptionStatusSnapshot | null> {
+    const subscriptionRecord = await this.loadSubscriptionFromSubscriptionsTable(userId);
+    if (subscriptionRecord) {
+      return subscriptionRecord;
     }
 
-    const row = ((data as unknown) ?? {}) as Record<string, unknown>;
-    const status = String(row.subscription_status ?? 'inactive').toLowerCase();
-    const expiresAtRaw = typeof row.subscription_expires_at === 'string' ? row.subscription_expires_at : null;
-    const expiresAt = expiresAtRaw ? new Date(expiresAtRaw) : null;
-    const isPremium = status === 'active' && (!expiresAt || expiresAt > new Date());
+    const usersSnapshot = await this.loadSubscriptionFromUsersTable(userId);
+    if (usersSnapshot) {
+      return usersSnapshot;
+    }
 
-    return {
-      isPremium,
-      status,
-      plan: typeof row.subscription_plan === 'string' ? row.subscription_plan : null,
-      productId: typeof row.subscription_product_id === 'string' ? row.subscription_product_id : null,
-      expiresAt: expiresAtRaw,
-      lastVerifiedAt: typeof row.subscription_last_verified_at === 'string' ? row.subscription_last_verified_at : null,
-      transactionId: typeof row.subscription_transaction_id === 'string' ? row.subscription_transaction_id : null,
-      originalTransactionId: typeof row.subscription_original_transaction_id === 'string' ? row.subscription_original_transaction_id : null,
-      environment: typeof row.subscription_environment === 'string' ? row.subscription_environment : null,
-    };
+    return this.defaultSubscriptionStatus();
   }
 
   static async updateUserSubscriptionStatus(
     userId: string,
-    payload: {
-      isPremium: boolean;
-      plan?: string | null;
-      productId?: string | null;
-      expiresAt?: string | null;
-      lastVerifiedAt?: string | null;
-      transactionId?: string | null;
-      originalTransactionId?: string | null;
-      environment?: string | null;
-    }
+    payload: SubscriptionStatusUpdatePayload
   ): Promise<boolean> {
-    const status = payload.isPremium ? 'active' : 'inactive';
-    const plan = payload.plan?.trim() || null;
+    const nowISO = new Date().toISOString();
+    const plan = this.normalizePlan(payload.plan);
     const productId = payload.productId?.trim() || null;
-    const expiresAt = payload.isPremium ? (payload.expiresAt ?? null) : null;
-    const transactionId = payload.isPremium ? (payload.transactionId ?? null) : null;
-    const originalTransactionId = payload.isPremium ? (payload.originalTransactionId ?? null) : null;
+    const transactionId = payload.isPremium ? (payload.transactionId?.trim() || null) : null;
+    const originalTransactionId = payload.isPremium ? (payload.originalTransactionId?.trim() || null) : null;
+    const lastVerifiedAt = this.normalizeTimestamp(payload.lastVerifiedAt) ?? nowISO;
+    const environment = payload.environment?.trim() || null;
 
-    const { error } = await supabase
+    let existingStartedAt: string | null = null;
+    let subscriptionTableAvailable = true;
+
+    const existingSubscriptionRow = await supabase
+      .from('subscriptions')
+      .select('subscription_started_at')
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (existingSubscriptionRow.error) {
+      if (this.isIgnorableMissingTableError(existingSubscriptionRow.error)) {
+        subscriptionTableAvailable = false;
+      } else if (!this.isNoRowsError(existingSubscriptionRow.error)) {
+        console.error('Error loading existing subscription row:', existingSubscriptionRow.error);
+        return false;
+      }
+    } else if (existingSubscriptionRow.data) {
+      existingStartedAt = this.normalizeTimestamp(
+        typeof existingSubscriptionRow.data.subscription_started_at === 'string'
+          ? existingSubscriptionRow.data.subscription_started_at
+          : null
+      );
+    }
+
+    const startedAt = payload.isPremium
+      ? (this.normalizeTimestamp(payload.startedAt) ?? existingStartedAt ?? lastVerifiedAt)
+      : null;
+    const expiresAt = this.deriveExpiresAt(
+      payload.isPremium,
+      plan,
+      startedAt,
+      this.normalizeTimestamp(payload.expiresAt)
+    );
+
+    const expiresDate = this.parseDate(expiresAt);
+    const activeNow = payload.isPremium && (!expiresDate || expiresDate > new Date());
+    const status = activeNow ? 'active' : 'inactive';
+
+    let wroteSubscriptionsTable = false;
+    if (subscriptionTableAvailable) {
+      const { error: subscriptionsError } = await supabase
+        .from('subscriptions')
+        .upsert(
+          {
+            user_id: userId,
+            subscription_active: activeNow,
+            subscription_status: status,
+            subscription_type: plan,
+            subscription_started_at: startedAt,
+            subscription_expires_at: expiresAt,
+            subscription_product_id: productId,
+            subscription_last_verified_at: lastVerifiedAt,
+            subscription_transaction_id: transactionId,
+            subscription_original_transaction_id: originalTransactionId,
+            subscription_environment: environment,
+            updated_at: nowISO,
+          },
+          { onConflict: 'user_id' }
+        );
+
+      if (subscriptionsError) {
+        if (this.isIgnorableMissingTableError(subscriptionsError)) {
+          subscriptionTableAvailable = false;
+        } else {
+          console.error('Error updating subscriptions table:', subscriptionsError);
+          return false;
+        }
+      } else {
+        wroteSubscriptionsTable = true;
+      }
+    }
+
+    const { error: usersError } = await supabase
       .from('users')
       .update({
         subscription_status: status,
         subscription_plan: plan,
         subscription_product_id: productId,
         subscription_expires_at: expiresAt,
-        subscription_last_verified_at: payload.lastVerifiedAt ?? new Date().toISOString(),
+        subscription_last_verified_at: lastVerifiedAt,
         subscription_transaction_id: transactionId,
         subscription_original_transaction_id: originalTransactionId,
-        subscription_environment: payload.environment ?? null,
+        subscription_environment: environment,
       })
       .eq('id', userId);
 
-    if (error) {
-      if (this.isMissingColumnError(error)) {
-        console.warn('Subscription columns are missing on users table; apply migration 019_user_subscription_status.sql');
+    const wroteUsersSnapshot = !usersError;
+
+    if (usersError) {
+      if (!this.isMissingColumnError(usersError)) {
+        console.error('Error updating user subscription snapshot:', usersError);
+        return wroteSubscriptionsTable;
+      }
+      if (!wroteSubscriptionsTable) {
+        console.warn('Subscription tables/columns missing; apply migrations 019 and 020.');
         return false;
       }
-      console.error('Error updating user subscription status:', error);
-      return false;
+      console.warn('User snapshot columns missing; canonical subscriptions table write succeeded.');
+      return true;
     }
 
-    return true;
+    return wroteSubscriptionsTable || wroteUsersSnapshot;
   }
 
   // ═══════════════════════════════════════════════════════════════

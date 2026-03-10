@@ -6,10 +6,11 @@ import UIKit
 
 struct MainTabView: View {
     let analysisResult: AnalysisResult
+    private let initialSkinTab: SkinView.SkinTab
     var onSignOut: (() -> Void)?
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    @State private var selectedTab: Tab = .home
+    @State private var selectedTab: Tab
     @StateObject private var cartManager = CartManager()
     @StateObject private var chatSession = ChatSession()
     
@@ -32,6 +33,18 @@ struct MainTabView: View {
     private var tabBarMaxWidth: CGFloat {
         horizontalSizeClass == .regular ? 700 : .infinity
     }
+
+    init(
+        analysisResult: AnalysisResult,
+        initialTab: Tab = .home,
+        initialSkinTab: SkinView.SkinTab = .progress,
+        onSignOut: (() -> Void)? = nil
+    ) {
+        self.analysisResult = analysisResult
+        self.initialSkinTab = initialSkinTab
+        self.onSignOut = onSignOut
+        _selectedTab = State(initialValue: initialTab)
+    }
     
     var body: some View {
         Group {
@@ -42,7 +55,7 @@ struct MainTabView: View {
             case .chat:
                 ChatView(analysisResult: analysisResult, cartManager: cartManager, chatSession: chatSession)
             case .skin:
-                SkinView()
+                SkinView(initialTab: initialSkinTab)
             case .settings:
                 SettingsView(onSignOut: onSignOut)
             }

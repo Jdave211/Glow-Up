@@ -866,7 +866,7 @@ app.get('/api/users/:userId/subscription', async (req, res) => {
   }
 });
 
-// Persist StoreKit-verified subscription state on the user record
+// Persist StoreKit-verified subscription state (canonical subscriptions table + user snapshot fallback)
 app.post('/api/users/:userId/subscription', async (req, res) => {
   try {
     const userId = req.params.userId;
@@ -878,6 +878,7 @@ app.post('/api/users/:userId/subscription', async (req, res) => {
       isPremium,
       plan,
       productId,
+      startedAt,
       expiresAt,
       lastVerifiedAt,
       transactionId,
@@ -893,6 +894,7 @@ app.post('/api/users/:userId/subscription', async (req, res) => {
       isPremium,
       plan: typeof plan === 'string' ? plan : null,
       productId: typeof productId === 'string' ? productId : null,
+      startedAt: typeof startedAt === 'string' ? startedAt : null,
       expiresAt: typeof expiresAt === 'string' ? expiresAt : null,
       lastVerifiedAt: typeof lastVerifiedAt === 'string' ? lastVerifiedAt : null,
       transactionId: typeof transactionId === 'string' ? transactionId : null,

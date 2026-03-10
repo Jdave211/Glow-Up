@@ -146,10 +146,14 @@ class SupabaseService {
 
     struct UserSubscriptionState: Codable {
         let isPremium: Bool
+        let subscriptionActive: Bool?
         let status: String
         let plan: String?
+        let startedAt: String?
         let productId: String?
         let expiresAt: String?
+        let secondsRemaining: Int?
+        let daysRemaining: Int?
         let lastVerifiedAt: String?
         let transactionId: String?
         let originalTransactionId: String?
@@ -160,6 +164,7 @@ class SupabaseService {
         let isPremium: Bool
         let plan: String?
         let productId: String?
+        let startedAt: String?
         let expiresAt: String?
         let lastVerifiedAt: String?
         let transactionId: String?

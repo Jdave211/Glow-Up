@@ -7,20 +7,9 @@ struct ContentView: View {
     @State private var analysisResult: AnalysisResult?
     @State private var currentUserId: String?
     @State private var isCheckingOnboarding = false
-
-    // Temporary local testing bypass: DEBUG builds can access app without an active subscription.
-    // Release builds remain premium-gated.
-    private var premiumGateBypassEnabled: Bool {
-        #if DEBUG
-        true
-        #else
-        false
-        #endif
-    }
-
-    private var hasPremiumAccess: Bool {
-        subscriptionManager.isPremium || premiumGateBypassEnabled
-    }
+    @State private var pendingMainTabOverride: MainTabView.Tab?
+    @State private var pendingSkinTabOverride: SkinView.SkinTab?
+    @State private var shouldRouteToRoutineAfterPaywallUnlock = false
     
     var body: some View {
         ZStack {
@@ -62,34 +51,16 @@ struct ContentView: View {
                         SessionManager.shared.hasFaceAnalysisConsent = true
                         startAnalyzingFlow()
                     },
-                    onCancel: {
-                        transitionTo(.intake)
-                    }
+                    onCancel: nil
                 )
                 
             case .analyzing:
                 AnalyzingView(result: $analysisResult) {
-                    transitionTo(.analysisSummary)
+                    handleOnboardingAnalysisComplete()
                 }
 
-            case .analysisSummary:
-                ResultsView(
-                    result: currentAnalysisResult,
-                    onRestart: {
-                        transitionTo(.intake)
-                    },
-                    continueButtonTitle: "Open My Glow",
-                    onContinue: {
-                        if hasPremiumAccess {
-                            transitionTo(.results)
-                        } else {
-                            transitionTo(.miniPaywall)
-                        }
-                    }
-                )
-
             case .results:
-                if hasPremiumAccess {
+                if subscriptionManager.isPremium {
                     mainApp
                 } else {
                     premiumGate
@@ -119,8 +90,9 @@ struct ContentView: View {
         }
         .onChange(of: subscriptionManager.isPremium) { _, isPremium in
             if isPremium && currentScreen == .miniPaywall {
-                transitionTo(.results)
-            } else if !hasPremiumAccess && currentScreen == .results && SessionManager.shared.isOnboarded {
+                handlePaywallUnlockSuccess()
+            } else if !subscriptionManager.isPremium && currentScreen == .results && SessionManager.shared.isOnboarded {
+                shouldRouteToRoutineAfterPaywallUnlock = false
                 transitionTo(.miniPaywall)
             }
         }
@@ -128,12 +100,20 @@ struct ContentView: View {
     
     @ViewBuilder
     private var mainApp: some View {
-        MainTabView(analysisResult: currentAnalysisResult, onSignOut: {
-            SessionManager.shared.signOut()
-            withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) {
-                currentScreen = .onboarding
+        MainTabView(
+            analysisResult: currentAnalysisResult,
+            initialTab: pendingMainTabOverride ?? .home,
+            initialSkinTab: pendingSkinTabOverride ?? .progress,
+            onSignOut: {
+                SessionManager.shared.signOut()
+                withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) {
+                    currentScreen = .onboarding
+                }
             }
-        })
+        )
+        .onAppear {
+            consumePendingLaunchOverrideIfNeeded()
+        }
     }
 
     private var currentAnalysisResult: AnalysisResult {
@@ -151,11 +131,10 @@ struct ContentView: View {
     }
 
     private var premiumGate: some View {
-        MiniPostOnboardingPaywallView(
+        PremiumPaywallView(
+            isDismissible: false,
             onUpgradeSuccess: {
-                withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) {
-                    currentScreen = .results
-                }
+                handlePaywallUnlockSuccess()
             }
         )
     }
@@ -195,7 +174,12 @@ struct ContentView: View {
                 if let routine = latestRoutine {
                     analysisResult = routine
                     SessionManager.shared.markOnboarded()
-                    transitionTo(hasPremiumAccess ? .results : .miniPaywall)
+                    if subscriptionManager.isPremium {
+                        transitionTo(.results)
+                    } else {
+                        shouldRouteToRoutineAfterPaywallUnlock = false
+                        transitionTo(.miniPaywall)
+                    }
                     return
                 }
 
@@ -203,7 +187,12 @@ struct ContentView: View {
                     if serverOnboarded {
                         SessionManager.shared.markOnboarded()
                     }
-                    transitionTo(hasPremiumAccess ? .results : .miniPaywall)
+                    if subscriptionManager.isPremium {
+                        transitionTo(.results)
+                    } else {
+                        shouldRouteToRoutineAfterPaywallUnlock = false
+                        transitionTo(.miniPaywall)
+                    }
                     return
                 }
 
@@ -275,6 +264,37 @@ struct ContentView: View {
         }
     }
     
+    private func handleOnboardingAnalysisComplete() {
+        if subscriptionManager.isPremium {
+            stagePostOnboardingDestination()
+            transitionTo(.results)
+        } else {
+            shouldRouteToRoutineAfterPaywallUnlock = true
+            transitionTo(.miniPaywall)
+        }
+    }
+
+    private func handlePaywallUnlockSuccess() {
+        if shouldRouteToRoutineAfterPaywallUnlock {
+            stagePostOnboardingDestination()
+            shouldRouteToRoutineAfterPaywallUnlock = false
+        }
+        transitionTo(.results)
+    }
+
+    private func stagePostOnboardingDestination() {
+        pendingMainTabOverride = .skin
+        pendingSkinTabOverride = .routine
+    }
+
+    private func consumePendingLaunchOverrideIfNeeded() {
+        guard pendingMainTabOverride != nil || pendingSkinTabOverride != nil else { return }
+        DispatchQueue.main.async {
+            pendingMainTabOverride = nil
+            pendingSkinTabOverride = nil
+        }
+    }
+
     // MARK: - Navigation helper
     
     private func transitionTo(_ screen: AppScreen) {
@@ -290,7 +310,6 @@ enum AppScreen {
     case intake
     case faceConsent
     case analyzing
-    case analysisSummary
     case miniPaywall
     case results
 }
@@ -625,7 +644,7 @@ enum AIConsentKind {
         case .chat:
             return "AI Chat Permission"
         case .faceAnalysis:
-            return "Face Data Permission"
+            return "Face Analysis"
         }
     }
 
@@ -634,7 +653,7 @@ enum AIConsentKind {
         case .chat:
             return "GlowUp needs your permission before sending personal data to third-party AI processing."
         case .faceAnalysis:
-            return "GlowUp needs explicit permission before analyzing face photos and related skin-profile data."
+            return "Your photos are used only to personalize your routine and skin analysis."
         }
     }
 
@@ -643,7 +662,16 @@ enum AIConsentKind {
         case .chat:
             return "Allow AI Chat"
         case .faceAnalysis:
-            return "Allow Face Analysis"
+            return "Continue"
+        }
+    }
+
+    var secondaryButtonTitle: String? {
+        switch self {
+        case .chat:
+            return "Not Now"
+        case .faceAnalysis:
+            return nil
         }
     }
 
@@ -657,10 +685,17 @@ enum AIConsentKind {
             ]
         case .faceAnalysis:
             return [
-                "Face data sent: the photos you select, your skin-profile answers, and derived face/skin analysis signals.",
-                "Recipients: GlowUp's backend, private Supabase storage for photos, and OpenAI for photo-driven analysis.",
-                "Retention: if Photo Check-ins is on, private photos are retained for up to 90 days for progress tracking; if it is off, uploaded raw photos are deleted after analysis and only derived analysis results remain."
+                "We never sell your face photos or use them for advertising."
             ]
+        }
+    }
+
+    var iconName: String {
+        switch self {
+        case .chat:
+            return "sparkles"
+        case .faceAnalysis:
+            return "faceid"
         }
     }
 }
@@ -668,53 +703,62 @@ enum AIConsentKind {
 struct AIDataConsentCard: View {
     let kind: AIConsentKind
     let onAccept: () -> Void
-    let onCancel: () -> Void
+    let onCancel: (() -> Void)?
 
     var body: some View {
-        VStack(spacing: 18) {
-            Circle()
-                .fill(Color(hex: "FFE8F1"))
-                .frame(width: 68, height: 68)
-                .overlay(
-                    Image(systemName: kind == .faceAnalysis ? "faceid" : "sparkles")
-                        .font(.system(size: 28, weight: .semibold))
-                        .foregroundColor(Color(hex: "FF6B9D"))
-                )
+        VStack(spacing: 20) {
+            ZStack {
+                Circle()
+                    .fill(Color.white.opacity(0.5))
+                    .frame(width: 74, height: 74)
+                    .overlay(
+                        Circle()
+                            .stroke(Color.white.opacity(0.75), lineWidth: 1)
+                    )
+
+                Image(systemName: kind.iconName)
+                    .font(.system(size: 30, weight: .semibold))
+                    .foregroundColor(Color(hex: "FF6B9D"))
+            }
 
             VStack(spacing: 8) {
                 Text(kind.title)
-                    .font(.custom("Didot", size: 30))
+                    .font(.custom("Didot", size: 34))
                     .fontWeight(.bold)
-                    .foregroundColor(Color(hex: "2D2D2D"))
+                    .foregroundColor(Color(hex: "242638"))
 
                 Text(kind.subtitle)
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(Color(hex: "666666"))
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundColor(Color(hex: "54576A"))
                     .multilineTextAlignment(.center)
+                    .lineSpacing(2)
             }
 
-            VStack(alignment: .leading, spacing: 12) {
-                ForEach(kind.disclosureItems, id: \.self) { item in
-                    HStack(alignment: .top, spacing: 10) {
-                        Image(systemName: "checkmark.shield.fill")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundColor(Color(hex: "FF6B9D"))
-                            .padding(.top, 2)
+            if !kind.disclosureItems.isEmpty {
+                VStack(alignment: .leading, spacing: kind == .faceAnalysis ? 8 : 12) {
+                    ForEach(kind.disclosureItems, id: \.self) { item in
+                        HStack(alignment: .top, spacing: 10) {
+                            Image(systemName: "checkmark.shield.fill")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundColor(Color(hex: "FF6B9D"))
+                                .padding(.top, 1)
 
-                        Text(item)
-                            .font(.system(size: 14))
-                            .foregroundColor(Color(hex: "444444"))
-                            .fixedSize(horizontal: false, vertical: true)
+                            Text(item)
+                                .font(.system(size: 14))
+                                .foregroundColor(Color(hex: "3D3F51"))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
                 }
+                .padding(16)
+                .background(Color.white.opacity(0.42))
+                .background(.ultraThinMaterial)
+                .cornerRadius(16)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16)
+                        .stroke(Color.white.opacity(0.65), lineWidth: 1)
+                )
             }
-            .padding(18)
-            .background(Color.white)
-            .cornerRadius(18)
-            .overlay(
-                RoundedRectangle(cornerRadius: 18)
-                    .stroke(Color(hex: "F3DDE7"), lineWidth: 1)
-            )
 
             VStack(spacing: 10) {
                 Button(action: onAccept) {
@@ -723,45 +767,87 @@ struct AIDataConsentCard: View {
                         .foregroundColor(.white)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 16)
-                        .background(Color(hex: "FF6B9D"))
+                        .background(
+                            LinearGradient(
+                                colors: [Color(hex: "FF5C95"), Color(hex: "FF79A9")],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
                         .cornerRadius(16)
+                        .shadow(color: Color(hex: "FF5C95").opacity(0.28), radius: 10, x: 0, y: 5)
                 }
 
-                Button(action: onCancel) {
-                    Text("Not Now")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundColor(Color(hex: "7A7A7A"))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 14)
-                        .background(Color.white.opacity(0.85))
-                        .cornerRadius(16)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 16)
-                                .stroke(Color(hex: "E9E1E5"), lineWidth: 1)
-                        )
+                if let cancelTitle = kind.secondaryButtonTitle, let onCancel {
+                    Button(action: onCancel) {
+                        Text(cancelTitle)
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundColor(Color(hex: "70758C"))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 14)
+                            .background(Color.white.opacity(0.55))
+                            .background(.ultraThinMaterial)
+                            .cornerRadius(16)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 16)
+                                    .stroke(Color.white.opacity(0.7), lineWidth: 1)
+                            )
+                    }
                 }
             }
         }
         .padding(22)
-        .background(Color(hex: "FFF8FB"))
-        .cornerRadius(28)
-        .shadow(color: Color.black.opacity(0.08), radius: 24, x: 0, y: 10)
+        .background(
+            RoundedRectangle(cornerRadius: 30, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .overlay(
+                    LinearGradient(
+                        colors: [Color.white.opacity(0.22), Color(hex: "FFDCEB").opacity(0.18)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: 30, style: .continuous))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 30, style: .continuous)
+                        .stroke(Color.white.opacity(0.72), lineWidth: 1)
+                )
+        )
+        .shadow(color: Color(hex: "8C5A7A").opacity(0.18), radius: 24, x: 0, y: 12)
     }
 }
 
 struct AIDataConsentScreen: View {
     let kind: AIConsentKind
     let onAccept: () -> Void
-    let onCancel: () -> Void
+    let onCancel: (() -> Void)?
+
+    init(kind: AIConsentKind, onAccept: @escaping () -> Void, onCancel: (() -> Void)? = nil) {
+        self.kind = kind
+        self.onAccept = onAccept
+        self.onCancel = onCancel
+    }
 
     var body: some View {
         ZStack {
             LinearGradient(
-                colors: [Color(hex: "FFF3F7"), Color.white],
-                startPoint: .top,
+                colors: [Color(hex: "F8DCEC"), Color(hex: "F8ECF9"), Color(hex: "FFF6FA")],
+                startPoint: .topLeading,
                 endPoint: .bottom
             )
             .ignoresSafeArea()
+
+            Circle()
+                .fill(Color.white.opacity(0.32))
+                .frame(width: 260, height: 260)
+                .blur(radius: 14)
+                .offset(x: -110, y: -240)
+
+            Circle()
+                .fill(Color(hex: "FFC7DF").opacity(0.36))
+                .frame(width: 220, height: 220)
+                .blur(radius: 18)
+                .offset(x: 130, y: 290)
 
             ScrollView(showsIndicators: false) {
                 AIDataConsentCard(kind: kind, onAccept: onAccept, onCancel: onCancel)

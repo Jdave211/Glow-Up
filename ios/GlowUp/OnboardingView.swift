@@ -2,7 +2,7 @@ import SwiftUI
 import AuthenticationServices
 
 struct OnboardingView: View {
-    let onComplete: (_ userId: String?) -> Void
+    let onComplete: (_ userId: String) -> Void
     @State private var currentImageIndex = 0
     @State private var signInErrorMessage: String?
     @State private var showSignInError = false
@@ -97,13 +97,6 @@ struct OnboardingView: View {
                     .signInWithAppleButtonStyle(.black) // Official Apple black button
                     .frame(height: 50)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
-                    
-                    // Secondary Button (Skip/Guest)
-                    Button(action: { onComplete(nil) }) {
-                        Text("Continue as Guest")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundColor(Color.white.opacity(0.8))
-                    }
                 }
                 .padding(.horizontal, 24)
                 .padding(.bottom, 50)

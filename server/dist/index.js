@@ -763,14 +763,14 @@ app.get('/api/users/:userId/subscription', async (req, res) => {
         return res.status(500).json({ error: 'Server error' });
     }
 });
-// Persist StoreKit-verified subscription state on the user record
+// Persist StoreKit-verified subscription state (canonical subscriptions table + user snapshot fallback)
 app.post('/api/users/:userId/subscription', async (req, res) => {
     try {
         const userId = req.params.userId;
         if (!userId) {
             return res.status(400).json({ error: 'User ID is required' });
         }
-        const { isPremium, plan, productId, expiresAt, lastVerifiedAt, transactionId, originalTransactionId, environment, } = req.body ?? {};
+        const { isPremium, plan, productId, startedAt, expiresAt, lastVerifiedAt, transactionId, originalTransactionId, environment, } = req.body ?? {};
         if (typeof isPremium !== 'boolean') {
             return res.status(400).json({ error: 'isPremium (boolean) is required' });
         }
@@ -778,6 +778,7 @@ app.post('/api/users/:userId/subscription', async (req, res) => {
             isPremium,
             plan: typeof plan === 'string' ? plan : null,
             productId: typeof productId === 'string' ? productId : null,
+            startedAt: typeof startedAt === 'string' ? startedAt : null,
             expiresAt: typeof expiresAt === 'string' ? expiresAt : null,
             lastVerifiedAt: typeof lastVerifiedAt === 'string' ? lastVerifiedAt : null,
             transactionId: typeof transactionId === 'string' ? transactionId : null,

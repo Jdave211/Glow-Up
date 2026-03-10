@@ -4,22 +4,10 @@ struct AnalyzingView: View {
     @Binding var result: AnalysisResult?
     let onComplete: () -> Void
     
-    @State private var currentQuoteIndex = 0
-    @State private var logoScale: CGFloat = 1.0
-    @State private var elapsedTime: Int = 0
-    
-    private let quotes = [
-        "Your skin is your largest organ. Treat it with love.",
-        "Consistency beats intensity. Every. Single. Time.",
-        "Hydration is the foundation of great skin.",
-        "SPF today, thank yourself in 10 years.",
-        "Your routine should feel like self-care, not a chore",
-        "Good skin is a journey, not a destination.",
-        "Listen to your skin—it tells you what it needs",
-        "Less is more. Quality over quantity always.",
-        "Night time is repair time.",
-        "Patience is the ultimate skincare ingredient"
-    ]
+    @State private var iconPulse: CGFloat = 1.0
+    @State private var haloRotation: Double = 0
+    @State private var glassDrift: CGFloat = -22
+    @State private var elapsedTicks: Int = 0
 
     private let loadingStages = [
         "Analyzing your photos + profile",
@@ -28,7 +16,7 @@ struct AnalyzingView: View {
     ]
 
     private var currentStage: String {
-        let idx = min(elapsedTime / 8, loadingStages.count - 1)
+        let idx = min(elapsedTicks / 8, loadingStages.count - 1)
         return loadingStages[idx]
     }
     
@@ -36,59 +24,84 @@ struct AnalyzingView: View {
         ZStack {
             LinearGradient(
                 colors: [
-                    Color(hex: "FFF0F5"),
-                    Color(hex: "FFE8F1")
+                    Color(hex: "F8DCEC"),
+                    Color(hex: "FDEAF4"),
+                    Color(hex: "FFF8FB")
                 ],
-                startPoint: .top,
-                endPoint: .bottom
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
             )
             .ignoresSafeArea()
+
+            Circle()
+                .fill(Color.white.opacity(0.45))
+                .frame(width: 240, height: 240)
+                .blur(radius: 24)
+                .offset(x: -125, y: -250)
+
+            Circle()
+                .fill(Color(hex: "FFC8DE").opacity(0.42))
+                .frame(width: 280, height: 280)
+                .blur(radius: 26)
+                .offset(x: 130, y: 260)
+
+            RoundedRectangle(cornerRadius: 50, style: .continuous)
+                .fill(Color.white.opacity(0.2))
+                .frame(width: 320, height: 320)
+                .blur(radius: 2)
+                .offset(y: glassDrift)
             
-            VStack(spacing: 22) {
+            VStack(spacing: 18) {
                 Spacer()
 
                 ZStack {
-                    Circle()
-                        .fill(Color.white)
-                        .frame(width: 92, height: 92)
-                        .shadow(color: Color(hex: "FF6B9D").opacity(0.18), radius: 14, x: 0, y: 6)
-                    Image(systemName: "sparkles")
-                        .font(.system(size: 34, weight: .medium))
-                        .foregroundColor(Color(hex: "FF6B9D"))
-                }
-                .scaleEffect(logoScale)
-                
-                VStack(spacing: 12) {
-                    Text("Building your glow-up plan")
-                        .font(.custom("Didot", size: 32))
-                        .fontWeight(.bold)
-                        .foregroundColor(Color(hex: "2D2D2D"))
-                    
-                    Text(currentStage)
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundColor(Color(hex: "6A6A6A"))
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 30)
-                }
+                    VStack(spacing: 14) {
+                        ZStack {
+                            Circle()
+                                .fill(Color.white.opacity(0.55))
+                                .frame(width: 102, height: 102)
+                            Circle()
+                                .stroke(Color.white.opacity(0.8), lineWidth: 1.2)
+                                .frame(width: 118, height: 118)
+                                .rotationEffect(.degrees(haloRotation))
+                            Text("✨")
+                                .font(.system(size: 38))
+                        }
+                        .scaleEffect(iconPulse)
 
-                ProgressView()
-                    .tint(Color(hex: "FF6B9D"))
-                    .scaleEffect(1.1)
+                        Text("Building your glow-up plan")
+                            .font(.custom("Didot", size: 34))
+                            .fontWeight(.bold)
+                            .foregroundColor(Color(hex: "252638"))
+                            .multilineTextAlignment(.center)
 
-                VStack(spacing: 14) {
-                    Text(quotes[currentQuoteIndex])
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundColor(Color(hex: "4A4A4A"))
-                        .multilineTextAlignment(.center)
-                        .lineSpacing(4)
-                        .padding(.horizontal, 30)
-                        .id(currentQuoteIndex)
-                        .transition(.opacity.combined(with: .move(edge: .bottom)))
+                        Text(currentStage)
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundColor(Color(hex: "5A5E72"))
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 10)
+
+                        ProgressView()
+                            .tint(Color(hex: "FF6B9D"))
+                            .scaleEffect(1.1)
+
+                        Text("Usually completes in under 20 seconds.")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(Color(hex: "8387A0"))
+                    }
+                    .padding(.horizontal, 26)
+                    .padding(.vertical, 30)
                 }
-                
-                Text("Usually completes in under 20 seconds.")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(Color(hex: "8A8A8A"))
+                .background(
+                    RoundedRectangle(cornerRadius: 30, style: .continuous)
+                        .fill(.ultraThinMaterial)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 30, style: .continuous)
+                                .stroke(Color.white.opacity(0.74), lineWidth: 1)
+                        )
+                )
+                .shadow(color: Color(hex: "8D5878").opacity(0.22), radius: 24, x: 0, y: 12)
+                .padding(.horizontal, 24)
                 
                 Spacer()
             }
@@ -100,24 +113,26 @@ struct AnalyzingView: View {
     }
     
     private func startAnimations() {
-        withAnimation(.easeInOut(duration: 1.5).repeatForever(autoreverses: true)) {
-            logoScale = 1.06
+        withAnimation(.easeInOut(duration: 1.7).repeatForever(autoreverses: true)) {
+            iconPulse = 1.07
         }
-        
-        Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { _ in
-            withAnimation(.easeInOut(duration: 0.5)) {
-                currentQuoteIndex = (currentQuoteIndex + 1) % quotes.count
-            }
+
+        withAnimation(.linear(duration: 8).repeatForever(autoreverses: false)) {
+            haloRotation = 360
+        }
+
+        withAnimation(.easeInOut(duration: 4.6).repeatForever(autoreverses: true)) {
+            glassDrift = 20
         }
     }
     
     private func checkForCompletion() {
         Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { timer in
-            elapsedTime += 1
+            elapsedTicks += 1
             
             if result != nil {
                 timer.invalidate()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
                     onComplete()
                 }
             }

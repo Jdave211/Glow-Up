@@ -1874,7 +1874,8 @@ struct SkinView: View {
                         instructions: step.tip ?? "",
                         frequency: "daily",
                         product_id: step.product_id,
-                        product_name: step.product_name
+                        product_name: step.product_name,
+                        product_brand: step.product_brand
                     )
                 }
                 let evening = item.evening.enumerated().map { index, step in
@@ -1884,7 +1885,8 @@ struct SkinView: View {
                         instructions: step.tip ?? "",
                         frequency: "daily",
                         product_id: step.product_id,
-                        product_name: step.product_name
+                        product_name: step.product_name,
+                        product_brand: step.product_brand
                     )
                 }
 

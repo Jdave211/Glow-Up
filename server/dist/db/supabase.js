@@ -717,6 +717,18 @@ class DatabaseService {
             return [];
         return data || [];
     }
+    static async deletePhotoCheckIn(checkInId, userId) {
+        const { error } = await exports.supabase
+            .from('photo_check_ins')
+            .delete()
+            .eq('id', checkInId)
+            .eq('user_id', userId);
+        if (error) {
+            console.error('Error deleting photo check-in:', error);
+            return false;
+        }
+        return true;
+    }
     // ═══════════════════════════════════════════════════════════════
     // CHAT OPERATIONS
     // ═══════════════════════════════════════════════════════════════

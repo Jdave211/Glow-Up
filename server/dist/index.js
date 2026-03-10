@@ -1139,16 +1139,23 @@ function mapDbProfileToInference(profile) {
 }
 async function ensureUserHasProductRoutine(userId, profile, latestRoutineRow) {
     if (latestRoutineRow?.routine_data) {
+        // Always preserve routines that have linked products
         if (routineHasLinkedProducts(latestRoutineRow.routine_data)) {
             return latestRoutineRow;
         }
-        if (routineHasAnySteps(latestRoutineRow.routine_data) && routinePreservesManualSteps(latestRoutineRow.routine_data)) {
-            console.log(`✍️ Keeping manual routine for ${userId} (non-product steps enabled).`);
+        // Always preserve manually edited routines (even without products)
+        if (routinePreservesManualSteps(latestRoutineRow.routine_data)) {
+            console.log(`✍️ Keeping manual routine for ${userId} (manual edit flag set).`);
+            return latestRoutineRow;
+        }
+        // Preserve routines that have any meaningful steps
+        if (routineHasAnySteps(latestRoutineRow.routine_data)) {
+            console.log(`📋 Keeping existing routine for ${userId} (has steps).`);
             return latestRoutineRow;
         }
     }
     try {
-        console.log(`🧴 No product-linked routine found for ${userId}. Generating one from inference...`);
+        console.log(`🧴 No routine found for ${userId}. Generating one from inference...`);
         const inferenceProfile = mapDbProfileToInference(profile);
         const inferred = await withTimeout((0, inference_1.runInference)(inferenceProfile), 22000, null);
         if (!inferred)
@@ -1338,6 +1345,12 @@ app.post('/api/routine/update', async (req, res) => {
                     name: String(s?.name || `Step ${idx + 1}`),
                     instructions: String(s?.instructions || s?.tip || ''),
                     frequency: String(s?.frequency || (routineType === 'weekly' ? 'weekly' : 'daily')),
+                    product_id: resolvedProduct?.id || s.product_id || null,
+                    product_name: resolvedProduct ? resolvedProduct.name : (s.product_name || null),
+                    product_brand: resolvedProduct ? resolvedProduct.brand : (s.product_brand || null),
+                    product_price: resolvedProduct?.price || s.product_price || null,
+                    product_image: resolvedProduct?.image_url || s.product_image || null,
+                    buy_link: resolvedProduct?.buy_link || s.buy_link || null,
                     product: resolvedProduct ? {
                         id: resolvedProduct.id,
                         name: resolvedProduct.name,
@@ -2852,6 +2865,27 @@ app.get('/api/photo-check-ins/:userId', async (req, res) => {
     }
     catch (error) {
         console.error('Error:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+// Delete photo check-in
+app.delete('/api/photo-check-ins/:checkInId', async (req, res) => {
+    try {
+        const { checkInId } = req.params;
+        const { userId } = req.body;
+        if (!userId) {
+            return res.status(400).json({ error: 'User ID is required' });
+        }
+        const success = await supabase_1.DatabaseService.deletePhotoCheckIn(checkInId, userId);
+        if (success) {
+            res.json({ success: true });
+        }
+        else {
+            res.status(404).json({ error: 'Check-in not found or could not be deleted' });
+        }
+    }
+    catch (error) {
+        console.error('Error deleting check-in:', error);
         res.status(500).json({ error: 'Server error' });
     }
 });

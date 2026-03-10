@@ -252,8 +252,7 @@ final class SubscriptionManager: ObservableObject {
     }
 
     private func observeTransactionUpdates() -> Task<Void, Never> {
-        Task { [weak self] in
-            guard let self else { return }
+        Task {
             for await verificationResult in Transaction.updates {
                 if let transaction = try? checkVerified(verificationResult) {
                     await transaction.finish()
@@ -316,14 +315,16 @@ final class SubscriptionManager: ObservableObject {
         )
 
         Task.detached(priority: .utility) { [weak self] in
-            var didSync = false
-            do {
-                didSync = try await SupabaseService.shared.syncUserSubscriptionStatus(userId: userId, payload: payload)
-            } catch {
-                #if DEBUG
-                print("⚠️ Subscription sync failed:", error.localizedDescription)
-                #endif
-            }
+            let didSync: Bool = await {
+                do {
+                    return try await SupabaseService.shared.syncUserSubscriptionStatus(userId: userId, payload: payload)
+                } catch {
+                    #if DEBUG
+                    print("⚠️ Subscription sync failed:", error.localizedDescription)
+                    #endif
+                    return false
+                }
+            }()
 
             await MainActor.run {
                 guard let self else { return }

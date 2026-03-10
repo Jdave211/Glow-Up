@@ -230,6 +230,7 @@ export declare class DatabaseService {
         improvementReported?: boolean;
     }): Promise<DbPhotoCheckIn | null>;
     static getPhotoCheckIns(userId: string): Promise<DbPhotoCheckIn[]>;
+    static deletePhotoCheckIn(checkInId: string, userId: string): Promise<boolean>;
     static createConversation(userId: string, title?: string): Promise<any | null>;
     static getConversations(userId: string): Promise<any[]>;
     static getConversationMessages(conversationId: string): Promise<any[]>;

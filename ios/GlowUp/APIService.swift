@@ -396,6 +396,9 @@ class APIService {
         let product_id: String?
         let product_name: String?
         let product_brand: String?
+        let product_price: Double?
+        let product_image: String?
+        let buy_link: String?
     }
 
     private struct RoutineUpdateRequest: Codable {

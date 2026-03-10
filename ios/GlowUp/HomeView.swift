@@ -2054,6 +2054,7 @@ struct RoutineDetailSheet: View {
                     draft: $editorDraft,
                     userId: userId,
                     frequencyOptions: frequencyOptions,
+                    routineType: routineType,
                     onSave: applyEditorDraft
                 )
             }
@@ -2233,7 +2234,10 @@ struct RoutineDetailSheet: View {
                 frequency: frequency,
                 product_id: step.product_id,
                 product_name: step.product_name,
-                product_brand: step.product_brand
+                product_brand: step.product_brand,
+                product_price: step.product_price,
+                product_image: step.product_image,
+                buy_link: step.buy_link
             )
         }
     }
@@ -2437,7 +2441,10 @@ struct EditableRoutineStep: Identifiable {
             frequency: frequency.isEmpty ? "daily" : frequency,
             product_id: productId,
             product_name: productName,
-            product_brand: productBrand
+            product_brand: productBrand,
+            product_price: productPrice,
+            product_image: productImage,
+            buy_link: buyLink
         )
     }
 }
@@ -2446,6 +2453,7 @@ struct RoutineStepEditorSheet: View {
     @Binding var draft: EditableRoutineStep
     let userId: String
     let frequencyOptions: [String]
+    let routineType: HomeView.RoutineType
     let onSave: () -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -2454,6 +2462,38 @@ struct RoutineStepEditorSheet: View {
     @State private var isSearching = false
     @State private var searchError: String?
 
+    private var accentColor: Color {
+        switch routineType {
+        case .morning: return Color(hex: "FF6B9D")
+        case .evening: return Color(hex: "9B6BFF")
+        case .weekly: return Color(hex: "4ECDC4")
+        }
+    }
+
+    private var backgroundColor: Color {
+        switch routineType {
+        case .morning: return Color(hex: "FFF5F8")
+        case .evening: return Color(hex: "1E2454")
+        case .weekly: return Color(hex: "E7FBF5")
+        }
+    }
+
+    private var cardBackgroundColor: Color {
+        switch routineType {
+        case .morning: return Color(hex: "FFF8FA")
+        case .evening: return Color(hex: "2B326A")
+        case .weekly: return Color(hex: "F2FCF9")
+        }
+    }
+
+    private var textColor: Color {
+        routineType == .evening ? Color.white : Color(hex: "2D2D2D")
+    }
+
+    private var secondaryTextColor: Color {
+        routineType == .evening ? Color.white.opacity(0.7) : Color(hex: "777777")
+    }
+
     var body: some View {
         NavigationView {
             ScrollView {
@@ -2461,7 +2501,7 @@ struct RoutineStepEditorSheet: View {
                     Stepper(value: $draft.step, in: 1...12) {
                         Text("Step \(draft.step)")
                             .font(.system(size: 15, weight: .semibold))
-                            .foregroundColor(Color(hex: "2D2D2D"))
+                            .foregroundColor(textColor)
                     }
 
                     TextField("Step title (e.g. Brightening Serum)", text: $draft.name)
@@ -2481,7 +2521,7 @@ struct RoutineStepEditorSheet: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Attach Product")
                             .font(.system(size: 15, weight: .semibold))
-                            .foregroundColor(Color(hex: "2D2D2D"))
+                            .foregroundColor(textColor)
 
                         HStack(spacing: 8) {
                             TextField("Search product name or concern", text: $searchQuery)
@@ -2497,7 +2537,7 @@ struct RoutineStepEditorSheet: View {
                             }
                             .padding(.horizontal, 12)
                             .padding(.vertical, 9)
-                            .background(Color(hex: "FF6B9D"))
+                            .background(accentColor)
                             .foregroundColor(.white)
                             .cornerRadius(10)
                             .disabled(isSearching || searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -2507,7 +2547,7 @@ struct RoutineStepEditorSheet: View {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(productName)
                                     .font(.system(size: 14, weight: .semibold))
-                                    .foregroundColor(Color(hex: "2D2D2D"))
+                                    .foregroundColor(textColor)
                                 HStack(spacing: 6) {
                                     if let brand = draft.productBrand, !brand.isEmpty {
                                         Text(brand)
@@ -2517,11 +2557,11 @@ struct RoutineStepEditorSheet: View {
                                     }
                                 }
                                 .font(.system(size: 12))
-                                .foregroundColor(Color(hex: "777777"))
+                                .foregroundColor(secondaryTextColor)
                                 if let productId = draft.productId, !productId.isEmpty {
                                     Text("ID: \(productId)")
                                         .font(.system(size: 11, weight: .medium, design: .monospaced))
-                                        .foregroundColor(Color(hex: "999999"))
+                                        .foregroundColor(secondaryTextColor.opacity(0.8))
                                 }
                                 Button("Remove Product") {
                                     draft.productId = nil
@@ -2535,7 +2575,7 @@ struct RoutineStepEditorSheet: View {
                                 .foregroundColor(Color(hex: "D64545"))
                             }
                             .padding(10)
-                            .background(Color(hex: "FFF8FA"))
+                            .background(cardBackgroundColor)
                             .cornerRadius(10)
                         }
 
@@ -2552,25 +2592,25 @@ struct RoutineStepEditorSheet: View {
                                         VStack(alignment: .leading, spacing: 3) {
                                             Text(product.name)
                                                 .font(.system(size: 13, weight: .semibold))
-                                                .foregroundColor(Color(hex: "2D2D2D"))
+                                                .foregroundColor(textColor)
                                                 .multilineTextAlignment(.leading)
                                             Text("\(product.brand) • \(String(format: "$%.2f", product.price))")
                                                 .font(.system(size: 12))
-                                                .foregroundColor(Color(hex: "666666"))
+                                                .foregroundColor(secondaryTextColor)
                                             Text("ID: \(product.id)")
                                                 .font(.system(size: 10, weight: .medium, design: .monospaced))
-                                                .foregroundColor(Color(hex: "999999"))
+                                                .foregroundColor(secondaryTextColor.opacity(0.8))
                                                 .lineLimit(1)
                                                 .truncationMode(.middle)
                                         }
                                         Spacer()
                                     }
                                     .padding(10)
-                                    .background(Color.white)
+                                    .background(cardBackgroundColor)
                                     .cornerRadius(10)
                                     .overlay(
                                         RoundedRectangle(cornerRadius: 10)
-                                            .stroke(Color(hex: "F0E0E8"), lineWidth: 1)
+                                            .stroke(accentColor.opacity(0.3), lineWidth: 1)
                                     )
                                 }
                                 .buttonStyle(PlainButtonStyle())
@@ -2580,7 +2620,7 @@ struct RoutineStepEditorSheet: View {
                 }
                 .padding(16)
             }
-            .background(Color(hex: "FFF5F8").ignoresSafeArea())
+            .background(backgroundColor.ignoresSafeArea())
             .navigationTitle("Edit Routine Step")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

@@ -2,124 +2,111 @@ import SwiftUI
 import AuthenticationServices
 
 struct OnboardingView: View {
-    private struct WelcomeFeature: Identifiable {
-        let id = UUID()
-        let icon: String
-        let title: String
-        let subtitle: String
-    }
-
-    let onComplete: (_ userId: String) -> Void
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    let onComplete: (_ userId: String?) -> Void
     @State private var currentImageIndex = 0
     @State private var signInErrorMessage: String?
     @State private var showSignInError = false
     let timer = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
-
-    private let backgroundImages = ["welcomebg1", "welcomebg2", "welcomebg3"]
-    private let subtitles = [
-        "A few photos in. A sharper routine, product plan, and progress dashboard out.",
-        "GlowUp turns selfies into technique guidance, skincare picks, and measurable check-ins.",
-        "Built for people who want structure, not vague beauty advice."
+    
+    // Background images
+    let backgroundImages = ["welcomebg1", "welcomebg2", "welcomebg3"]
+    
+    // Rotating Quotes/Subtitles
+    let subtitles = [
+        "Upload photos + a little context. We do the heavy lifting.",
+        "Photo-led glow-up analysis with techniques and product picks.",
+        "Upgrade to GlowUp+ for deeper, personalized recommendations."
     ]
-    private let featurePills = ["Photo-led analysis", "Routine roadmap", "Progress tracking"]
-    private let welcomeFeatures = [
-        WelcomeFeature(icon: "camera.macro", title: "Analyze photos", subtitle: "Find what to improve first."),
-        WelcomeFeature(icon: "list.bullet.clipboard", title: "Build a routine", subtitle: "Get steps that fit your skin."),
-        WelcomeFeature(icon: "chart.line.uptrend.xyaxis", title: "Track change", subtitle: "See your check-ins stack up."),
-        WelcomeFeature(icon: "lock.shield", title: "Stay synced", subtitle: "Keep everything tied to one account.")
-    ]
-
+    
     var body: some View {
-        GeometryReader { proxy in
-            ZStack(alignment: .bottom) {
-                rotatingBackground(in: proxy)
-
-                VStack(alignment: .leading, spacing: 0) {
-                    topBrandRow(safeTop: proxy.safeAreaInsets.top)
-                    Spacer(minLength: 24)
-
-                    VStack(alignment: .leading, spacing: 20) {
-                        pageDots
-
-                        VStack(alignment: .leading, spacing: 14) {
-                            Text("Photo-led beauty,\nbut structured.")
-                                .font(.custom("Didot", size: headlineSize(for: proxy)))
-                                .fontWeight(.bold)
-                                .foregroundColor(.white)
-                                .lineSpacing(4)
-
-                            Text(subtitles[currentImageIndex])
-                                .font(.system(size: horizontalSizeClass == .regular ? 19 : 17, weight: .medium))
-                                .foregroundColor(Color(hex: "FFD9E8"))
-                                .fixedSize(horizontal: false, vertical: true)
-                                .transition(.opacity.combined(with: .move(edge: .bottom)))
-                                .id("subtitle-\(currentImageIndex)")
-                        }
-
-                        featurePillRow
-
-                        LazyVGrid(columns: gridColumns, spacing: 10) {
-                            ForEach(welcomeFeatures) { feature in
-                                welcomeFeatureCard(feature)
-                            }
-                        }
-
-                        VStack(alignment: .leading, spacing: 10) {
-                            SignInWithAppleButton(
-                                .signIn,
-                                onRequest: { request in
-                                    request.requestedScopes = [.fullName, .email]
-                                },
-                                onCompletion: { result in
-                                    switch result {
-                                    case .success(let authResults):
-                                        handleAuthorization(authResults)
-                                    case .failure(let error):
-                                        showAuthError(error.localizedDescription)
-                                    }
-                                }
-                            )
-                            .signInWithAppleButtonStyle(.white)
-                            .frame(height: 54)
-                            .clipShape(RoundedRectangle(cornerRadius: 16))
-
-                            Text("Sign in to keep your photos, routines, chat, and progress synced across sessions.")
-                                .font(.system(size: 12.5, weight: .medium))
-                                .foregroundColor(Color.white.opacity(0.74))
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
-                    .frame(maxWidth: contentMaxWidth, alignment: .leading)
-                    .padding(.horizontal, 22)
-                    .padding(.top, 22)
-                    .padding(.bottom, max(20, proxy.safeAreaInsets.bottom + 10))
-                    .background(
-                        LinearGradient(
-                            colors: [
-                                Color(hex: "241728").opacity(0.94),
-                                Color(hex: "150E1D").opacity(0.90)
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 28)
-                            .stroke(Color.white.opacity(0.16), lineWidth: 1)
-                    )
-                    .clipShape(RoundedRectangle(cornerRadius: 28))
-                    .shadow(color: Color.black.opacity(0.22), radius: 28, x: 0, y: 18)
+        ZStack {
+            // MARK: - Rotating Background
+            TabView(selection: $currentImageIndex) {
+                ForEach(0..<backgroundImages.count, id: \.self) { index in
+                    Image(backgroundImages[index])
+                        .resizable()
+                        .aspectRatio(contentMode: .fill) // Changed to aspectRatio fill
+                        .frame(width: UIScreen.main.bounds.width, height: UIScreen.main.bounds.height) // Explicit full screen frame
+                        .clipped()
+                        .ignoresSafeArea()
+                        .tag(index)
                 }
-                .padding(.horizontal, horizontalSizeClass == .regular ? 32 : 16)
-                .padding(.bottom, 10)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
+            .tabViewStyle(.page(indexDisplayMode: .never))
             .ignoresSafeArea()
+            .overlay(
+                // Gradient Overlay for Text Readability (Darker at bottom)
+                LinearGradient(
+                    colors: [
+                        Color.clear,
+                        Color.black.opacity(0.2),
+                        Color(hex: "2D1F3D").opacity(0.8),
+                        Color(hex: "1A1225").opacity(0.95)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .ignoresSafeArea()
+            )
             .onReceive(timer) { _ in
-                withAnimation(.easeInOut(duration: 1.2)) {
+                withAnimation(.easeInOut(duration: 1.5)) {
                     currentImageIndex = (currentImageIndex + 1) % backgroundImages.count
                 }
+            }
+            
+            // MARK: - Content
+            VStack(alignment: .leading, spacing: 0) {
+                Spacer()
+                
+                // Text Section (approx 2/3 down)
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("Glow Up\nFrom Your Photos.")
+                        .font(.custom("Didot", size: 48)) // Greek/Pink Vibe
+                        .fontWeight(.bold)
+                        .foregroundColor(.white)
+                        .lineSpacing(4)
+                        .shadow(color: .black.opacity(0.3), radius: 4, x: 0, y: 2)
+                    
+                    Text(subtitles[currentImageIndex])
+                        .font(.system(size: 18, weight: .medium))
+                        .foregroundColor(Color(hex: "FFD4E5")) // Soft Pink
+                        .lineLimit(2)
+                        .transition(.opacity.combined(with: .move(edge: .bottom)))
+                        .id("subtitle-\(currentImageIndex)")
+                }
+                .padding(.horizontal, 24)
+                .padding(.bottom, 24)
+
+                // Buttons Section
+                VStack(spacing: 16) {
+                    // Sign In With Apple (Primary) - Official Apple Style
+                    SignInWithAppleButton(
+                        .signIn,
+                        onRequest: { request in
+                            request.requestedScopes = [.fullName, .email]
+                        },
+                        onCompletion: { result in
+                            switch result {
+                            case .success(let authResults):
+                                handleAuthorization(authResults)
+                            case .failure(let error):
+                                showAuthError(error.localizedDescription)
+                            }
+                        }
+                    )
+                    .signInWithAppleButtonStyle(.black) // Official Apple black button
+                    .frame(height: 50)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    
+                    // Secondary Button (Skip/Guest)
+                    Button(action: { onComplete(nil) }) {
+                        Text("Continue as Guest")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundColor(Color.white.opacity(0.8))
+                    }
+                }
+                .padding(.horizontal, 24)
+                .padding(.bottom, 50)
             }
         }
         .alert("Sign In Failed", isPresented: $showSignInError) {
@@ -128,147 +115,8 @@ struct OnboardingView: View {
             Text(signInErrorMessage ?? "We couldn't sign you in right now. Please try again.")
         }
     }
-
-    private var contentMaxWidth: CGFloat {
-        horizontalSizeClass == .regular ? 640 : .infinity
-    }
-
-    private var gridColumns: [GridItem] {
-        [
-            GridItem(.flexible(), spacing: 10),
-            GridItem(.flexible(), spacing: 10)
-        ]
-    }
-
-    private func headlineSize(for proxy: GeometryProxy) -> CGFloat {
-        if horizontalSizeClass == .regular { return 52 }
-        return min(48, max(38, proxy.size.width * 0.115))
-    }
-
-    private func rotatingBackground(in proxy: GeometryProxy) -> some View {
-        TabView(selection: $currentImageIndex) {
-            ForEach(0..<backgroundImages.count, id: \.self) { index in
-                Image(backgroundImages[index])
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(width: proxy.size.width, height: proxy.size.height)
-                    .clipped()
-                    .tag(index)
-            }
-        }
-        .tabViewStyle(.page(indexDisplayMode: .never))
-        .overlay(
-            ZStack {
-                LinearGradient(
-                    colors: [
-                        Color.black.opacity(0.12),
-                        Color.black.opacity(0.28),
-                        Color(hex: "2B1834").opacity(0.86),
-                        Color(hex: "120B19")
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-
-                RadialGradient(
-                    colors: [Color(hex: "FF8FB7").opacity(0.28), .clear],
-                    center: .topTrailing,
-                    startRadius: 40,
-                    endRadius: 460
-                )
-            }
-        )
-    }
-
-    private func topBrandRow(safeTop: CGFloat) -> some View {
-        HStack(alignment: .center) {
-            HStack(spacing: 8) {
-                Image(systemName: "sparkles")
-                    .font(.system(size: 12, weight: .bold))
-                Text("GlowUp")
-                    .font(.system(size: 13, weight: .bold))
-            }
-            .foregroundColor(.white)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 9)
-            .background(Color.black.opacity(0.22))
-            .overlay(
-                Capsule()
-                    .stroke(Color.white.opacity(0.18), lineWidth: 1)
-            )
-            .clipShape(Capsule())
-
-            Spacer()
-
-            Text("Private account experience")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundColor(Color.white.opacity(0.88))
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(Color.white.opacity(0.10))
-                .clipShape(Capsule())
-        }
-        .padding(.top, safeTop + 12)
-        .padding(.horizontal, horizontalSizeClass == .regular ? 32 : 16)
-    }
-
-    private var pageDots: some View {
-        HStack(spacing: 8) {
-            ForEach(backgroundImages.indices, id: \.self) { index in
-                Capsule()
-                    .fill(index == currentImageIndex ? Color(hex: "FF8FB7") : Color.white.opacity(0.18))
-                    .frame(width: index == currentImageIndex ? 28 : 8, height: 8)
-            }
-        }
-    }
-
-    private var featurePillRow: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(featurePills, id: \.self) { pill in
-                    Text(pill)
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundColor(Color.white.opacity(0.92))
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(Color.white.opacity(0.10))
-                        .clipShape(Capsule())
-                }
-            }
-        }
-        .scrollClipDisabled()
-    }
-
-    private func welcomeFeatureCard(_ feature: WelcomeFeature) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            ZStack {
-                Circle()
-                    .fill(Color.white.opacity(0.10))
-                    .frame(width: 34, height: 34)
-                Image(systemName: feature.icon)
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundColor(Color(hex: "FFB1CA"))
-            }
-
-            Text(feature.title)
-                .font(.system(size: 14, weight: .bold))
-                .foregroundColor(.white)
-
-            Text(feature.subtitle)
-                .font(.system(size: 12.5, weight: .medium))
-                .foregroundColor(Color.white.opacity(0.68))
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .frame(maxWidth: .infinity, minHeight: 108, alignment: .topLeading)
-        .padding(14)
-        .background(Color.white.opacity(0.08))
-        .overlay(
-            RoundedRectangle(cornerRadius: 18)
-                .stroke(Color.white.opacity(0.10), lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 18))
-    }
-
+    
+    // Handle Apple Sign In
     func handleAuthorization(_ result: ASAuthorization) {
         if let appleIDCredential = result.credential as? ASAuthorizationAppleIDCredential {
             guard let identityTokenData = appleIDCredential.identityToken,

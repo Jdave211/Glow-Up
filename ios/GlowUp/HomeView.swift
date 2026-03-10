@@ -1771,6 +1771,8 @@ struct RoutineDetailSheet: View {
     @State private var showingStepEditor = false
     @State private var editingStepLocalId: String?
     @State private var editorDraft = EditableRoutineStep.blank(step: 1, frequency: "daily")
+    @State private var originalStepSignature = ""
+    @State private var showUnsavedChangesAlert = false
     private let routineSharingEnabled = SessionManager.isRoutineSharingEnabled
     
     private var routineTypeStr: String {
@@ -1804,6 +1806,25 @@ struct RoutineDetailSheet: View {
         case .weekly: return Color(hex: "4ECDC4")
         }
     }
+
+    private var themeBackgroundColors: [Color] {
+        switch routineType {
+        case .morning:
+            return [Color(hex: "FFF3CC"), Color(hex: "FFE7B8"), Color(hex: "FFF5ED")]
+        case .evening:
+            return [Color(hex: "0F1533"), Color(hex: "1E2454"), Color(hex: "2B326A")]
+        case .weekly:
+            return [Color(hex: "E7FBF5"), Color(hex: "DDF6F3"), Color(hex: "F2FCF9")]
+        }
+    }
+
+    private var headingColor: Color {
+        routineType == .evening ? Color.white : Color(hex: "2D2D2D")
+    }
+
+    private var headingSecondaryColor: Color {
+        routineType == .evening ? Color.white.opacity(0.86) : Color(hex: "58586A")
+    }
     
     private var currentStreak: Int {
         switch routineType {
@@ -1823,6 +1844,10 @@ struct RoutineDetailSheet: View {
 
     private var orderedEditableSteps: [EditableRoutineStep] {
         editableSteps.sorted { $0.step < $1.step }
+    }
+
+    private var hasUnsavedChanges: Bool {
+        editableSignature(for: orderedEditableSteps) != originalStepSignature
     }
     
     private var isComplete: Bool {
@@ -1857,13 +1882,23 @@ struct RoutineDetailSheet: View {
                 ScrollView {
                     VStack(spacing: 24) {
                         VStack(spacing: 12) {
-                            Image(systemName: icon)
-                                .font(.system(size: 50))
-                                .foregroundColor(accentColor)
+                            ZStack {
+                                Circle()
+                                    .fill(routineType == .evening ? Color.white.opacity(0.14) : Color.white.opacity(0.88))
+                                    .frame(width: 90, height: 90)
+                                Image(systemName: icon)
+                                    .font(.system(size: 40, weight: .semibold))
+                                    .foregroundColor(routineType == .evening ? Color.white : accentColor)
+                            }
                             
                             Text(title)
                                 .font(.system(size: 28, weight: .bold, design: .serif))
-                                .foregroundColor(Color(hex: "2D2D2D"))
+                                .foregroundColor(headingColor)
+
+                            Text(routineType == .morning ? "Start bright, stay protected." : routineType == .evening ? "Repair and reset overnight." : "Weekly upgrades for visible gains.")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundColor(headingSecondaryColor)
+                                .multilineTextAlignment(.center)
                             
                             if routineType != .weekly && currentStreak > 0 {
                                 HStack(spacing: 6) {
@@ -1885,7 +1920,7 @@ struct RoutineDetailSheet: View {
                         if isEditing {
                             Text("Edit mode: choose specific products, adjust steps, then save.")
                                 .font(.system(size: 12, weight: .medium))
-                                .foregroundColor(Color(hex: "777777"))
+                                .foregroundColor(headingSecondaryColor)
                                 .padding(.horizontal, 20)
                         }
                         
@@ -1920,7 +1955,7 @@ struct RoutineDetailSheet: View {
                                 }
                                 .buttonStyle(PlainButtonStyle())
 
-                                Button(action: saveRoutineEdits) {
+                                Button(action: { saveRoutineEdits() }) {
                                     HStack(spacing: 8) {
                                         if isSavingRoutine {
                                             ProgressView().tint(.white)
@@ -1981,10 +2016,38 @@ struct RoutineDetailSheet: View {
                     .zIndex(2)
                 }
             }
-            .background(PinkDrapeBackground().ignoresSafeArea())
+            .background(
+                ZStack {
+                    LinearGradient(
+                        colors: themeBackgroundColors,
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                    .ignoresSafeArea()
+
+                    if routineType != .evening {
+                        PinkDrapeBackground()
+                            .opacity(0.2)
+                            .ignoresSafeArea()
+                    }
+                }
+            )
             .navigationBarTitleDisplayMode(.inline)
             .onAppear {
                 resetEditableSteps()
+            }
+            .alert("Unsaved Changes", isPresented: $showUnsavedChangesAlert) {
+                Button("Save and Close") {
+                    saveRoutineEdits(dismissAfterSave: true)
+                }
+                Button("Discard Changes", role: .destructive) {
+                    resetEditableSteps()
+                    isEditing = false
+                    dismiss()
+                }
+                Button("Cancel", role: .cancel) { }
+            } message: {
+                Text("You have unsaved routine edits. Save them before leaving?")
             }
             .sheet(isPresented: $showingStepEditor) {
                 RoutineStepEditorSheet(
@@ -2011,18 +2074,32 @@ struct RoutineDetailSheet: View {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button(action: {
                         if isEditing {
-                            resetEditableSteps()
-                            saveError = nil
+                            if hasUnsavedChanges {
+                                saveRoutineEdits()
+                            } else {
+                                isEditing = false
+                            }
+                        } else {
+                            isEditing = true
                         }
-                        isEditing.toggle()
                     }) {
-                        Text(isEditing ? "Cancel" : "Edit")
+                        Text(isEditing ? (hasUnsavedChanges ? "Save" : "Done") : "Edit")
                             .font(.system(size: 14, weight: .semibold))
-                            .foregroundColor(accentColor)
+                            .foregroundColor(isSavingRoutine ? Color(hex: "A8A8B2") : accentColor)
                     }
+                    .disabled(isSavingRoutine)
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(action: { dismiss() }) {
+                    Button(action: {
+                        if isSavingRoutine {
+                            return
+                        }
+                        if isEditing && hasUnsavedChanges {
+                            showUnsavedChangesAlert = true
+                            return
+                        }
+                        dismiss()
+                    }) {
                         Image(systemName: "xmark")
                             .font(.system(size: 14, weight: .semibold))
                             .foregroundColor(Color(hex: "888888"))
@@ -2039,6 +2116,8 @@ struct RoutineDetailSheet: View {
         editableSteps = steps
             .sorted { $0.step < $1.step }
             .map(EditableRoutineStep.init(feedStep:))
+        originalStepSignature = editableSignature(for: editableSteps)
+        saveError = nil
     }
 
     private func beginEditing(step: EditableRoutineStep) {
@@ -2079,11 +2158,12 @@ struct RoutineDetailSheet: View {
         }
     }
 
-    private func saveRoutineEdits() {
+    private func saveRoutineEdits(dismissAfterSave: Bool = false) {
         guard !userId.isEmpty else {
             saveError = "Sign in again to save routine edits."
             return
         }
+        guard !isSavingRoutine else { return }
         guard !orderedEditableSteps.isEmpty else { return }
         isSavingRoutine = true
         saveError = nil
@@ -2125,10 +2205,15 @@ struct RoutineDetailSheet: View {
                 await MainActor.run {
                     completedSteps = refreshedCompletedSteps
                     streaks = refreshedStreaks
+                    originalStepSignature = editableSignature(for: orderedEditableSteps)
                     isSavingRoutine = false
                     isEditing = false
                     saveError = nil
+                    NotificationCenter.default.post(name: .glowUpRoutineDidUpdate, object: nil, userInfo: ["userId": userId])
                     onRoutineUpdated?()
+                    if dismissAfterSave {
+                        dismiss()
+                    }
                 }
             } catch {
                 await MainActor.run {
@@ -2147,9 +2232,26 @@ struct RoutineDetailSheet: View {
                 instructions: step.tip ?? "",
                 frequency: frequency,
                 product_id: step.product_id,
-                product_name: step.product_name
+                product_name: step.product_name,
+                product_brand: step.product_brand
             )
         }
+    }
+
+    private func editableSignature(for steps: [EditableRoutineStep]) -> String {
+        steps
+            .sorted { $0.step < $1.step }
+            .map { step in
+                [
+                    String(step.step),
+                    step.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+                    step.instructions.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+                    step.frequency.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+                    step.productId ?? "",
+                    step.productName?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+                ].joined(separator: "|")
+            }
+            .joined(separator: "||")
     }
     
     private func toggleStep(_ step: FeedRoutineStep) {
@@ -2334,7 +2436,8 @@ struct EditableRoutineStep: Identifiable {
             instructions: instructions,
             frequency: frequency.isEmpty ? "daily" : frequency,
             product_id: productId,
-            product_name: productName
+            product_name: productName,
+            product_brand: productBrand
         )
     }
 }

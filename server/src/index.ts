@@ -846,6 +846,72 @@ app.get('/api/users/:userId/onboarded', async (req, res) => {
   }
 });
 
+// Get user subscription status snapshot
+app.get('/api/users/:userId/subscription', async (req, res) => {
+  try {
+    const userId = req.params.userId;
+    if (!userId) {
+      return res.status(400).json({ error: 'User ID is required' });
+    }
+
+    const status = await DatabaseService.getUserSubscriptionStatus(userId);
+    if (!status) {
+      return res.status(500).json({ error: 'Failed to load subscription status' });
+    }
+
+    return res.json({ success: true, subscription: status });
+  } catch (error) {
+    console.error('Error loading subscription status:', error);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Persist StoreKit-verified subscription state on the user record
+app.post('/api/users/:userId/subscription', async (req, res) => {
+  try {
+    const userId = req.params.userId;
+    if (!userId) {
+      return res.status(400).json({ error: 'User ID is required' });
+    }
+
+    const {
+      isPremium,
+      plan,
+      productId,
+      expiresAt,
+      lastVerifiedAt,
+      transactionId,
+      originalTransactionId,
+      environment,
+    } = req.body ?? {};
+
+    if (typeof isPremium !== 'boolean') {
+      return res.status(400).json({ error: 'isPremium (boolean) is required' });
+    }
+
+    const updated = await DatabaseService.updateUserSubscriptionStatus(userId, {
+      isPremium,
+      plan: typeof plan === 'string' ? plan : null,
+      productId: typeof productId === 'string' ? productId : null,
+      expiresAt: typeof expiresAt === 'string' ? expiresAt : null,
+      lastVerifiedAt: typeof lastVerifiedAt === 'string' ? lastVerifiedAt : null,
+      transactionId: typeof transactionId === 'string' ? transactionId : null,
+      originalTransactionId: typeof originalTransactionId === 'string' ? originalTransactionId : null,
+      environment: typeof environment === 'string' ? environment : null,
+    });
+
+    if (!updated) {
+      return res.status(500).json({ error: 'Failed to persist subscription status' });
+    }
+
+    const subscription = await DatabaseService.getUserSubscriptionStatus(userId);
+    return res.json({ success: true, subscription });
+  } catch (error) {
+    console.error('Error updating subscription status:', error);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // Get user info
 app.get('/api/users/:userId', async (req, res) => {
   try {
@@ -1452,6 +1518,8 @@ app.post('/api/routine/update', async (req, res) => {
           name: String(s?.name || `Step ${idx + 1}`),
           instructions: String(s?.instructions || s?.tip || ''),
           frequency: String(s?.frequency || (routineType === 'weekly' ? 'weekly' : 'daily')),
+          product_name: resolvedProduct ? resolvedProduct.name : (s.product_name || null),
+          product_brand: resolvedProduct ? resolvedProduct.brand : (s.product_brand || null),
           product: resolvedProduct ? {
             id: resolvedProduct.id,
             name: resolvedProduct.name,
@@ -3124,6 +3192,28 @@ app.get('/api/photo-check-ins/:userId', async (req, res) => {
     res.json({ success: true, checkIns: signedCheckIns });
   } catch (error) {
     console.error('Error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Delete photo check-in
+app.delete('/api/photo-check-ins/:checkInId', async (req, res) => {
+  try {
+    const { checkInId } = req.params;
+    const { userId } = req.body;
+    
+    if (!userId) {
+      return res.status(400).json({ error: 'User ID is required' });
+    }
+
+    const success = await DatabaseService.deletePhotoCheckIn(checkInId, userId);
+    if (success) {
+      res.json({ success: true });
+    } else {
+      res.status(404).json({ error: 'Check-in not found or could not be deleted' });
+    }
+  } catch (error) {
+    console.error('Error deleting check-in:', error);
     res.status(500).json({ error: 'Server error' });
   }
 });

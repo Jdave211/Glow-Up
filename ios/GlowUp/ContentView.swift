@@ -1,12 +1,26 @@
 import SwiftUI
 
 struct ContentView: View {
+    @ObservedObject private var subscriptionManager = SubscriptionManager.shared
     @State private var currentScreen: AppScreen = .loading
     @State private var userProfile = UserProfile()
     @State private var analysisResult: AnalysisResult?
     @State private var currentUserId: String?
     @State private var isCheckingOnboarding = false
-    @State private var shouldShowPostOnboardingPaywall = false
+
+    // Temporary local testing bypass: DEBUG builds can access app without an active subscription.
+    // Release builds remain premium-gated.
+    private var premiumGateBypassEnabled: Bool {
+        #if DEBUG
+        true
+        #else
+        false
+        #endif
+    }
+
+    private var hasPremiumAccess: Bool {
+        subscriptionManager.isPremium || premiumGateBypassEnabled
+    }
     
     var body: some View {
         ZStack {
@@ -25,31 +39,8 @@ struct ContentView: View {
                 
             case .onboarding:
                 OnboardingView(onComplete: { userId in
-                    if let userId = userId {
-                        currentUserId = userId
-                        resolveSignedInUserLaunchState(userId: userId)
-                    } else {
-                        beginGuestChatFlow()
-                    }
-                })
-
-            case .guestConsent:
-                AIDataConsentScreen(
-                    kind: .chat,
-                    onAccept: {
-                        SessionManager.shared.hasAIDataConsent = true
-                        transitionTo(.guestChat)
-                    },
-                    onCancel: {
-                        transitionTo(.onboarding)
-                    }
-                )
-                
-            case .guestChat:
-                GuestChatView(onBack: {
-                    withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) {
-                        currentScreen = .onboarding
-                    }
+                    currentUserId = userId
+                    resolveSignedInUserLaunchState(userId: userId)
                 })
                 
             case .intake:
@@ -85,37 +76,27 @@ struct ContentView: View {
                 ResultsView(
                     result: currentAnalysisResult,
                     onRestart: {
-                        shouldShowPostOnboardingPaywall = false
                         transitionTo(.intake)
                     },
                     continueButtonTitle: "Open My Glow",
                     onContinue: {
-                        if shouldShowPostOnboardingPaywall && !SubscriptionManager.shared.isPremium {
-                            transitionTo(.miniPaywall)
-                        } else {
+                        if hasPremiumAccess {
                             transitionTo(.results)
+                        } else {
+                            transitionTo(.miniPaywall)
                         }
                     }
                 )
 
             case .results:
-                mainApp
+                if hasPremiumAccess {
+                    mainApp
+                } else {
+                    premiumGate
+                }
 
             case .miniPaywall:
-                MiniPostOnboardingPaywallView(
-                    onUpgradeSuccess: {
-                        shouldShowPostOnboardingPaywall = false
-                        withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) {
-                            currentScreen = .results
-                        }
-                    },
-                    onContinueFree: {
-                        shouldShowPostOnboardingPaywall = false
-                        withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) {
-                            currentScreen = .results
-                        }
-                    }
-                )
+                premiumGate
             }
             
             // Loading overlay while checking onboarding
@@ -134,6 +115,13 @@ struct ContentView: View {
                     .background(Color(hex: "2D2D2D"))
                     .cornerRadius(16)
                 }
+            }
+        }
+        .onChange(of: subscriptionManager.isPremium) { _, isPremium in
+            if isPremium && currentScreen == .miniPaywall {
+                transitionTo(.results)
+            } else if !hasPremiumAccess && currentScreen == .results && SessionManager.shared.isOnboarded {
+                transitionTo(.miniPaywall)
             }
         }
     }
@@ -159,6 +147,16 @@ struct ContentView: View {
                 personalized_tips: ["Stay consistent with your routine for the best results."]
             ),
             inference: nil
+        )
+    }
+
+    private var premiumGate: some View {
+        MiniPostOnboardingPaywallView(
+            onUpgradeSuccess: {
+                withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) {
+                    currentScreen = .results
+                }
+            }
         )
     }
     
@@ -189,6 +187,7 @@ struct ContentView: View {
 
             let serverOnboarded = await onboardedRequest ?? false
             let latestRoutine = await routineRequest ?? nil
+            await SubscriptionManager.shared.refreshEntitlements()
 
             await MainActor.run {
                 isCheckingOnboarding = false
@@ -196,7 +195,7 @@ struct ContentView: View {
                 if let routine = latestRoutine {
                     analysisResult = routine
                     SessionManager.shared.markOnboarded()
-                    transitionTo(.results)
+                    transitionTo(hasPremiumAccess ? .results : .miniPaywall)
                     return
                 }
 
@@ -204,7 +203,7 @@ struct ContentView: View {
                     if serverOnboarded {
                         SessionManager.shared.markOnboarded()
                     }
-                    transitionTo(.results)
+                    transitionTo(hasPremiumAccess ? .results : .miniPaywall)
                     return
                 }
 
@@ -214,14 +213,6 @@ struct ContentView: View {
     }
     
     // MARK: - Onboarding + Analysis
-
-    private func beginGuestChatFlow() {
-        if SessionManager.shared.hasAIDataConsent {
-            transitionTo(.guestChat)
-        } else {
-            transitionTo(.guestConsent)
-        }
-    }
 
     private func beginAnalysisFlow() {
         let parsed = userProfile.normalized()
@@ -262,7 +253,6 @@ struct ContentView: View {
                 // Server already saved the routine — just mark onboarded locally
                 if currentUserId != nil {
                     SessionManager.shared.markOnboarded()
-                    shouldShowPostOnboardingPaywall = !SessionManager.shared.isPremium
                 }
             } catch {
                 // Set placeholder so analyzing screen doesn't hang
@@ -297,8 +287,6 @@ struct ContentView: View {
 enum AppScreen {
     case loading
     case onboarding
-    case guestConsent
-    case guestChat
     case intake
     case faceConsent
     case analyzing
@@ -337,7 +325,7 @@ struct GuestChatView: View {
 
         I can answer basic looksmaxing questions (skin-first, plus hair/smile basics) with short context, but guest mode does not save chat history.
 
-        Create an account to upload photos and get a personalized glow-up plan. GlowUp+ ($1.99/mo) adds deeper recommendation quality, objective technique guidance, and stronger product matching.
+        Create an account to upload photos and get a personalized glow-up plan. GlowUp+ ($2.99/week or $6.99/month) adds deeper recommendation quality, objective technique guidance, and stronger product matching.
         """
     }
 
@@ -665,7 +653,7 @@ enum AIConsentKind {
             return [
                 "Data sent: your chat message, plus your saved routine and profile context when needed for a reply.",
                 "Recipients: GlowUp's backend, Supabase for conversation storage, and OpenAI for AI-generated responses.",
-                "Storage: GlowUp stores your signed-in chat history so it appears across sessions. Guest mode does not save chat history."
+                "Storage: GlowUp stores your signed-in chat history so it appears across sessions, and you can delete chats from the app at any time."
             ]
         case .faceAnalysis:
             return [

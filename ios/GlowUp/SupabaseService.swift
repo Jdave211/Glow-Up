@@ -143,6 +143,79 @@ class SupabaseService {
         let response = try JSONDecoder().decode(OnboardedResponse.self, from: data)
         return response.onboarded
     }
+
+    struct UserSubscriptionState: Codable {
+        let isPremium: Bool
+        let status: String
+        let plan: String?
+        let productId: String?
+        let expiresAt: String?
+        let lastVerifiedAt: String?
+        let transactionId: String?
+        let originalTransactionId: String?
+        let environment: String?
+    }
+
+    struct SubscriptionSyncPayload: Codable {
+        let isPremium: Bool
+        let plan: String?
+        let productId: String?
+        let expiresAt: String?
+        let lastVerifiedAt: String?
+        let transactionId: String?
+        let originalTransactionId: String?
+        let environment: String?
+    }
+
+    func getUserSubscriptionStatus(userId: String) async throws -> UserSubscriptionState? {
+        guard let url = URL(string: "\(baseURL)/api/users/\(userId)/subscription") else {
+            throw APIError.invalidURL
+        }
+
+        let (data, response) = try await URLSession.shared.data(for: URLRequest(url: url))
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw APIError.serverError
+        }
+        guard httpResponse.statusCode == 200 else {
+            throw APIError.serverError
+        }
+
+        struct SubscriptionResponse: Codable {
+            let success: Bool
+            let subscription: UserSubscriptionState?
+            let error: String?
+        }
+
+        let decoded = try JSONDecoder().decode(SubscriptionResponse.self, from: data)
+        return decoded.subscription
+    }
+
+    @discardableResult
+    func syncUserSubscriptionStatus(userId: String, payload: SubscriptionSyncPayload) async throws -> Bool {
+        guard let url = URL(string: "\(baseURL)/api/users/\(userId)/subscription") else {
+            throw APIError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(payload)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw APIError.serverError
+        }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            throw APIError.serverError
+        }
+
+        struct SyncResponse: Codable {
+            let success: Bool
+        }
+
+        let decoded = try JSONDecoder().decode(SyncResponse.self, from: data)
+        return decoded.success
+    }
     
     // Get user's latest routine
     func getLatestRoutine(userId: String) async throws -> AnalysisResult? {

@@ -745,6 +745,56 @@ app.get('/api/users/:userId/onboarded', async (req, res) => {
         res.status(500).json({ error: 'Server error' });
     }
 });
+// Get user subscription status snapshot
+app.get('/api/users/:userId/subscription', async (req, res) => {
+    try {
+        const userId = req.params.userId;
+        if (!userId) {
+            return res.status(400).json({ error: 'User ID is required' });
+        }
+        const status = await supabase_1.DatabaseService.getUserSubscriptionStatus(userId);
+        if (!status) {
+            return res.status(500).json({ error: 'Failed to load subscription status' });
+        }
+        return res.json({ success: true, subscription: status });
+    }
+    catch (error) {
+        console.error('Error loading subscription status:', error);
+        return res.status(500).json({ error: 'Server error' });
+    }
+});
+// Persist StoreKit-verified subscription state on the user record
+app.post('/api/users/:userId/subscription', async (req, res) => {
+    try {
+        const userId = req.params.userId;
+        if (!userId) {
+            return res.status(400).json({ error: 'User ID is required' });
+        }
+        const { isPremium, plan, productId, expiresAt, lastVerifiedAt, transactionId, originalTransactionId, environment, } = req.body ?? {};
+        if (typeof isPremium !== 'boolean') {
+            return res.status(400).json({ error: 'isPremium (boolean) is required' });
+        }
+        const updated = await supabase_1.DatabaseService.updateUserSubscriptionStatus(userId, {
+            isPremium,
+            plan: typeof plan === 'string' ? plan : null,
+            productId: typeof productId === 'string' ? productId : null,
+            expiresAt: typeof expiresAt === 'string' ? expiresAt : null,
+            lastVerifiedAt: typeof lastVerifiedAt === 'string' ? lastVerifiedAt : null,
+            transactionId: typeof transactionId === 'string' ? transactionId : null,
+            originalTransactionId: typeof originalTransactionId === 'string' ? originalTransactionId : null,
+            environment: typeof environment === 'string' ? environment : null,
+        });
+        if (!updated) {
+            return res.status(500).json({ error: 'Failed to persist subscription status' });
+        }
+        const subscription = await supabase_1.DatabaseService.getUserSubscriptionStatus(userId);
+        return res.json({ success: true, subscription });
+    }
+    catch (error) {
+        console.error('Error updating subscription status:', error);
+        return res.status(500).json({ error: 'Server error' });
+    }
+});
 // Get user info
 app.get('/api/users/:userId', async (req, res) => {
     try {

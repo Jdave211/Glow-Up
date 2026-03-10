@@ -5,6 +5,14 @@ export interface DbUser {
     email: string;
     name: string;
     onboarded: boolean;
+    subscription_status?: string | null;
+    subscription_plan?: string | null;
+    subscription_product_id?: string | null;
+    subscription_expires_at?: string | null;
+    subscription_last_verified_at?: string | null;
+    subscription_transaction_id?: string | null;
+    subscription_original_transaction_id?: string | null;
+    subscription_environment?: string | null;
     created_at: string;
 }
 export interface DbProfile {
@@ -119,6 +127,7 @@ export interface DbPhotoCheckIn {
 export declare class DatabaseService {
     private static readonly ROUTINE_KEY_ALPHABET;
     private static isIgnorableMissingTableError;
+    private static isMissingColumnError;
     private static isStoragePathRef;
     static normalizeRoutineKey(input: string | null | undefined): string | null;
     static extractRoutineKey(routineData: any): string | null;
@@ -133,6 +142,27 @@ export declare class DatabaseService {
     static deleteUserAccount(userId: string): Promise<boolean>;
     static markUserOnboarded(userId: string): Promise<boolean>;
     static isUserOnboarded(userId: string): Promise<boolean>;
+    static getUserSubscriptionStatus(userId: string): Promise<{
+        isPremium: boolean;
+        status: string;
+        plan: string | null;
+        productId: string | null;
+        expiresAt: string | null;
+        lastVerifiedAt: string | null;
+        transactionId: string | null;
+        originalTransactionId: string | null;
+        environment: string | null;
+    } | null>;
+    static updateUserSubscriptionStatus(userId: string, payload: {
+        isPremium: boolean;
+        plan?: string | null;
+        productId?: string | null;
+        expiresAt?: string | null;
+        lastVerifiedAt?: string | null;
+        transactionId?: string | null;
+        originalTransactionId?: string | null;
+        environment?: string | null;
+    }): Promise<boolean>;
     static saveProfile(userId: string, profile: {
         skinType: string;
         skinTone?: number;

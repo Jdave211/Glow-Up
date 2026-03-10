@@ -29,6 +29,14 @@ export interface DbUser {
   email: string;
   name: string;
   onboarded: boolean;
+  subscription_status?: string | null;
+  subscription_plan?: string | null;
+  subscription_product_id?: string | null;
+  subscription_expires_at?: string | null;
+  subscription_last_verified_at?: string | null;
+  subscription_transaction_id?: string | null;
+  subscription_original_transaction_id?: string | null;
+  subscription_environment?: string | null;
   created_at: string;
 }
 
@@ -168,6 +176,13 @@ export class DatabaseService {
     if (!error || typeof error !== 'object') return false;
     const code = (error as { code?: string }).code;
     return code === '42P01';
+  }
+
+  private static isMissingColumnError(error: unknown): boolean {
+    if (!error || typeof error !== 'object') return false;
+    const code = (error as { code?: string }).code;
+    const message = String((error as { message?: string }).message ?? '').toLowerCase();
+    return code === '42703' || code === 'PGRST204' || (message.includes('column') && message.includes('does not exist'));
   }
 
   private static isStoragePathRef(ref: unknown): ref is string {
@@ -408,6 +423,117 @@ export class DatabaseService {
     
     if (error) return false;
     return data?.onboarded === true;
+  }
+
+  static async getUserSubscriptionStatus(userId: string): Promise<{
+    isPremium: boolean;
+    status: string;
+    plan: string | null;
+    productId: string | null;
+    expiresAt: string | null;
+    lastVerifiedAt: string | null;
+    transactionId: string | null;
+    originalTransactionId: string | null;
+    environment: string | null;
+  } | null> {
+    const { data, error } = await supabase
+      .from('users')
+      .select(
+        [
+          'subscription_status',
+          'subscription_plan',
+          'subscription_product_id',
+          'subscription_expires_at',
+          'subscription_last_verified_at',
+          'subscription_transaction_id',
+          'subscription_original_transaction_id',
+          'subscription_environment',
+        ].join(', ')
+      )
+      .eq('id', userId)
+      .single();
+
+    if (error) {
+      if (this.isMissingColumnError(error)) {
+        return {
+          isPremium: false,
+          status: 'inactive',
+          plan: null,
+          productId: null,
+          expiresAt: null,
+          lastVerifiedAt: null,
+          transactionId: null,
+          originalTransactionId: null,
+          environment: null,
+        };
+      }
+      console.error('Error loading user subscription status:', error);
+      return null;
+    }
+
+    const row = ((data as unknown) ?? {}) as Record<string, unknown>;
+    const status = String(row.subscription_status ?? 'inactive').toLowerCase();
+    const expiresAtRaw = typeof row.subscription_expires_at === 'string' ? row.subscription_expires_at : null;
+    const expiresAt = expiresAtRaw ? new Date(expiresAtRaw) : null;
+    const isPremium = status === 'active' && (!expiresAt || expiresAt > new Date());
+
+    return {
+      isPremium,
+      status,
+      plan: typeof row.subscription_plan === 'string' ? row.subscription_plan : null,
+      productId: typeof row.subscription_product_id === 'string' ? row.subscription_product_id : null,
+      expiresAt: expiresAtRaw,
+      lastVerifiedAt: typeof row.subscription_last_verified_at === 'string' ? row.subscription_last_verified_at : null,
+      transactionId: typeof row.subscription_transaction_id === 'string' ? row.subscription_transaction_id : null,
+      originalTransactionId: typeof row.subscription_original_transaction_id === 'string' ? row.subscription_original_transaction_id : null,
+      environment: typeof row.subscription_environment === 'string' ? row.subscription_environment : null,
+    };
+  }
+
+  static async updateUserSubscriptionStatus(
+    userId: string,
+    payload: {
+      isPremium: boolean;
+      plan?: string | null;
+      productId?: string | null;
+      expiresAt?: string | null;
+      lastVerifiedAt?: string | null;
+      transactionId?: string | null;
+      originalTransactionId?: string | null;
+      environment?: string | null;
+    }
+  ): Promise<boolean> {
+    const status = payload.isPremium ? 'active' : 'inactive';
+    const plan = payload.plan?.trim() || null;
+    const productId = payload.productId?.trim() || null;
+    const expiresAt = payload.isPremium ? (payload.expiresAt ?? null) : null;
+    const transactionId = payload.isPremium ? (payload.transactionId ?? null) : null;
+    const originalTransactionId = payload.isPremium ? (payload.originalTransactionId ?? null) : null;
+
+    const { error } = await supabase
+      .from('users')
+      .update({
+        subscription_status: status,
+        subscription_plan: plan,
+        subscription_product_id: productId,
+        subscription_expires_at: expiresAt,
+        subscription_last_verified_at: payload.lastVerifiedAt ?? new Date().toISOString(),
+        subscription_transaction_id: transactionId,
+        subscription_original_transaction_id: originalTransactionId,
+        subscription_environment: payload.environment ?? null,
+      })
+      .eq('id', userId);
+
+    if (error) {
+      if (this.isMissingColumnError(error)) {
+        console.warn('Subscription columns are missing on users table; apply migration 019_user_subscription_status.sql');
+        return false;
+      }
+      console.error('Error updating user subscription status:', error);
+      return false;
+    }
+
+    return true;
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -897,6 +1023,20 @@ export class DatabaseService {
     
     if (error) return [];
     return data || [];
+  }
+
+  static async deletePhotoCheckIn(checkInId: string, userId: string): Promise<boolean> {
+    const { error } = await supabase
+      .from('photo_check_ins')
+      .delete()
+      .eq('id', checkInId)
+      .eq('user_id', userId);
+    
+    if (error) {
+      console.error('Error deleting photo check-in:', error);
+      return false;
+    }
+    return true;
   }
 
   // ═══════════════════════════════════════════════════════════════

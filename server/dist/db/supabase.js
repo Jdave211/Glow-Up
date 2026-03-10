@@ -30,6 +30,13 @@ class DatabaseService {
         const code = error.code;
         return code === '42P01';
     }
+    static isMissingColumnError(error) {
+        if (!error || typeof error !== 'object')
+            return false;
+        const code = error.code;
+        const message = String(error.message ?? '').toLowerCase();
+        return code === '42703' || code === 'PGRST204' || (message.includes('column') && message.includes('does not exist'));
+    }
     static isStoragePathRef(ref) {
         if (typeof ref !== 'string' || !ref)
             return false;
@@ -239,6 +246,85 @@ class DatabaseService {
         if (error)
             return false;
         return data?.onboarded === true;
+    }
+    static async getUserSubscriptionStatus(userId) {
+        const { data, error } = await exports.supabase
+            .from('users')
+            .select([
+            'subscription_status',
+            'subscription_plan',
+            'subscription_product_id',
+            'subscription_expires_at',
+            'subscription_last_verified_at',
+            'subscription_transaction_id',
+            'subscription_original_transaction_id',
+            'subscription_environment',
+        ].join(', '))
+            .eq('id', userId)
+            .single();
+        if (error) {
+            if (this.isMissingColumnError(error)) {
+                return {
+                    isPremium: false,
+                    status: 'inactive',
+                    plan: null,
+                    productId: null,
+                    expiresAt: null,
+                    lastVerifiedAt: null,
+                    transactionId: null,
+                    originalTransactionId: null,
+                    environment: null,
+                };
+            }
+            console.error('Error loading user subscription status:', error);
+            return null;
+        }
+        const row = (data ?? {});
+        const status = String(row.subscription_status ?? 'inactive').toLowerCase();
+        const expiresAtRaw = typeof row.subscription_expires_at === 'string' ? row.subscription_expires_at : null;
+        const expiresAt = expiresAtRaw ? new Date(expiresAtRaw) : null;
+        const isPremium = status === 'active' && (!expiresAt || expiresAt > new Date());
+        return {
+            isPremium,
+            status,
+            plan: typeof row.subscription_plan === 'string' ? row.subscription_plan : null,
+            productId: typeof row.subscription_product_id === 'string' ? row.subscription_product_id : null,
+            expiresAt: expiresAtRaw,
+            lastVerifiedAt: typeof row.subscription_last_verified_at === 'string' ? row.subscription_last_verified_at : null,
+            transactionId: typeof row.subscription_transaction_id === 'string' ? row.subscription_transaction_id : null,
+            originalTransactionId: typeof row.subscription_original_transaction_id === 'string' ? row.subscription_original_transaction_id : null,
+            environment: typeof row.subscription_environment === 'string' ? row.subscription_environment : null,
+        };
+    }
+    static async updateUserSubscriptionStatus(userId, payload) {
+        const status = payload.isPremium ? 'active' : 'inactive';
+        const plan = payload.plan?.trim() || null;
+        const productId = payload.productId?.trim() || null;
+        const expiresAt = payload.isPremium ? (payload.expiresAt ?? null) : null;
+        const transactionId = payload.isPremium ? (payload.transactionId ?? null) : null;
+        const originalTransactionId = payload.isPremium ? (payload.originalTransactionId ?? null) : null;
+        const { error } = await exports.supabase
+            .from('users')
+            .update({
+            subscription_status: status,
+            subscription_plan: plan,
+            subscription_product_id: productId,
+            subscription_expires_at: expiresAt,
+            subscription_last_verified_at: payload.lastVerifiedAt ?? new Date().toISOString(),
+            subscription_transaction_id: transactionId,
+            subscription_original_transaction_id: originalTransactionId,
+            subscription_environment: payload.environment ?? null,
+        })
+            .eq('id', userId);
+        if (error) {
+            if (this.isMissingColumnError(error)) {
+                console.warn('Subscription columns are missing on users table; apply migration 019_user_subscription_status.sql');
+                return false;
+            }
+            console.error('Error updating user subscription status:', error);
+            return false;
+        }
+        return true;
     }
     // ═══════════════════════════════════════════════════════════════
     // PROFILE OPERATIONS

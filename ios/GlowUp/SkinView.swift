@@ -149,6 +149,8 @@ struct SkinView: View {
     @State private var timelineStatusMessage: String?
     @State private var timelineStatusIsError = false
     @State private var selectedTimelinePhotoItem: PhotosPickerItem?
+    @State private var showDeleteConfirmation = false
+    @State private var isDeletingPhoto = false
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     private let routineSharingEnabled = SessionManager.isRoutineSharingEnabled
     
@@ -275,9 +277,9 @@ struct SkinView: View {
             weeklySteps: feedRoutineSteps(for: .weekly),
                     completedSteps: completedStepsBinding,
                     streaks: $routineStreaks,
-                    userId: SessionManager.shared.userId ?? "",
+                    userId: resolvedUserId ?? "",
                     onRoutineUpdated: {
-                        viewModel.load(userId: SessionManager.shared.userId, forceRefresh: true)
+                        viewModel.load(userId: resolvedUserId, forceRefresh: true)
                     }
                 )
             }
@@ -326,74 +328,99 @@ struct SkinView: View {
                 Rectangle()
                     .fill(.ultraThinMaterial)
                     .ignoresSafeArea()
-                    .onTapGesture {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            self.selectedTimelinePhoto = nil
-                        }
-                    }
 
                 GeometryReader { proxy in
                     let modalWidth = min(max(proxy.size.width - 40, 280), 620)
                     let imageHeight = min(420, max(250, proxy.size.height * 0.5))
 
-                    VStack(spacing: 12) {
-                        HStack {
-                            Spacer()
-                            Button {
-                                withAnimation(.easeInOut(duration: 0.2)) {
-                                    self.selectedTimelinePhoto = nil
-                                }
-                            } label: {
-                                Image(systemName: "xmark")
-                                    .font(.system(size: 13, weight: .bold))
-                                    .foregroundColor(Color(hex: "666666"))
-                                    .padding(10)
-                                    .background(Color.white.opacity(0.9))
-                                    .clipShape(Circle())
+                    ZStack {
+                        Color.clear
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                dismissSelectedTimelinePhoto()
                             }
-                            .buttonStyle(.plain)
+
+                        VStack(spacing: 12) {
+                            HStack {
+                                Button {
+                                    showDeleteConfirmation = true
+                                } label: {
+                                    Image(systemName: "trash")
+                                        .font(.system(size: 13, weight: .bold))
+                                        .foregroundColor(Color(hex: "D64545"))
+                                        .padding(10)
+                                        .background(Color.white.opacity(0.9))
+                                        .clipShape(Circle())
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(isDeletingPhoto)
+
+                                Spacer()
+                                Button {
+                                    dismissSelectedTimelinePhoto()
+                                } label: {
+                                    Image(systemName: "xmark")
+                                        .font(.system(size: 13, weight: .bold))
+                                        .foregroundColor(Color(hex: "666666"))
+                                        .padding(10)
+                                        .background(Color.white.opacity(0.9))
+                                        .clipShape(Circle())
+                                }
+                                .buttonStyle(.plain)
+                            }
+
+                            TimelineRemoteImage(urlString: selectedTimelinePhoto.imageURL)
+                                .frame(maxWidth: .infinity)
+                                .frame(height: imageHeight)
+                                .clipShape(RoundedRectangle(cornerRadius: 18))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 18)
+                                        .stroke(Color.white.opacity(0.8), lineWidth: 1)
+                                )
+
+                            HStack(spacing: 8) {
+                                Text(selectedTimelinePhoto.label)
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundColor(Color(hex: "454545"))
+                                Text("•")
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundColor(Color(hex: "9A9A9A"))
+                                Text(selectedTimelinePhoto.date)
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundColor(Color(hex: "8A8A92"))
+                                Spacer()
+                                Text("Score \(selectedTimelinePhoto.score)")
+                                    .font(.system(size: 12, weight: .bold))
+                                    .foregroundColor(Color(hex: "FF5C95"))
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 6)
+                                    .background(Color(hex: "FFF0F5"))
+                                    .cornerRadius(10)
+                            }
                         }
-
-                        TimelineRemoteImage(urlString: selectedTimelinePhoto.imageURL)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: imageHeight)
-                            .clipShape(RoundedRectangle(cornerRadius: 18))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 18)
-                                    .stroke(Color.white.opacity(0.8), lineWidth: 1)
-                            )
-
-                        HStack(spacing: 8) {
-                            Text(selectedTimelinePhoto.label)
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundColor(Color(hex: "454545"))
-                            Text("•")
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundColor(Color(hex: "9A9A9A"))
-                            Text(selectedTimelinePhoto.date)
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundColor(Color(hex: "8A8A92"))
-                            Spacer()
-                            Text("Score \(selectedTimelinePhoto.score)")
-                                .font(.system(size: 12, weight: .bold))
-                                .foregroundColor(Color(hex: "FF5C95"))
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 6)
-                                .background(Color(hex: "FFF0F5"))
-                                .cornerRadius(10)
+                        .padding(16)
+                        .frame(width: modalWidth)
+                        .background(Color(hex: "FCFBFD").opacity(0.95))
+                        .cornerRadius(20)
+                        .shadow(color: Color.black.opacity(0.16), radius: 26, x: 0, y: 12)
+                        .onTapGesture {
+                            // Keep taps inside the modal from falling through to the backdrop dismiss target.
                         }
                     }
-                    .padding(16)
-                    .frame(width: modalWidth)
-                    .background(Color(hex: "FCFBFD").opacity(0.95))
-                    .cornerRadius(20)
-                    .shadow(color: Color.black.opacity(0.16), radius: 26, x: 0, y: 12)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
             .transition(.opacity.combined(with: .scale(scale: 0.98)))
             .zIndex(3)
+            .alert("Delete Photo?", isPresented: $showDeleteConfirmation) {
+                Button("Delete", role: .destructive) {
+                    deleteSelectedPhoto()
+                }
+                Button("Cancel", role: .cancel) { }
+            } message: {
+                Text("This action cannot be undone.")
             }
+        }
     }
 
     private var skinRootContent: some View {
@@ -464,6 +491,38 @@ struct SkinView: View {
         shareItems = preview.shareItems
         sharePreview = nil
         showShareSheet = true
+    }
+
+    private func dismissSelectedTimelinePhoto() {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            selectedTimelinePhoto = nil
+        }
+    }
+
+    private func deleteSelectedPhoto() {
+        guard let photo = selectedTimelinePhoto, let userId = SessionManager.shared.userId else { return }
+        isDeletingPhoto = true
+        
+        Task {
+            do {
+                try await APIService.shared.deletePhotoCheckIn(userId: userId, checkInId: photo.id)
+                await MainActor.run {
+                    withAnimation {
+                        progressHistory.removeAll { $0.id == photo.id }
+                    }
+                    isDeletingPhoto = false
+                    selectedTimelinePhoto = nil
+                    timelineStatusMessage = "Photo deleted."
+                    timelineStatusIsError = false
+                }
+            } catch {
+                await MainActor.run {
+                    isDeletingPhoto = false
+                    timelineStatusMessage = "Failed to delete photo."
+                    timelineStatusIsError = true
+                }
+            }
+        }
     }
 
     private func handleDestinationNotification(_ note: Notification) {
@@ -788,38 +847,172 @@ struct SkinView: View {
     
     // MARK: - Tab Picker
     private var tabPicker: some View {
-        HStack(spacing: 0) {
+        HStack(spacing: 8) {
             ForEach(SkinTab.allCases, id: \.self) { tab in
                 Button(action: {
                     withAnimation(.spring(response: 0.3)) {
                         selectedTab = tab
                     }
                 }) {
-                    VStack(spacing: 6) {
+                    HStack(spacing: 8) {
+                        Image(systemName: tab == .progress ? "viewfinder.circle.fill" : "list.bullet.clipboard.fill")
+                            .font(.system(size: 14, weight: .semibold))
                         Text(tab.rawValue)
                             .font(.system(size: 13, weight: .semibold))
-                            .foregroundColor(selectedTab == tab ? Color(hex: "FF5C95") : Color(hex: "8D8D94"))
-                        Capsule()
-                            .fill(selectedTab == tab ? Color(hex: "FF5C95") : Color.clear)
-                            .frame(height: 3)
                     }
+                    .foregroundColor(selectedTab == tab ? .white : Color(hex: "7B6D76"))
                     .frame(maxWidth: .infinity)
-                    .padding(.top, 10)
+                    .padding(.vertical, 12)
+                    .background(
+                        Group {
+                            if selectedTab == tab {
+                                LinearGradient(
+                                    colors: [Color(hex: "FF5C95"), Color(hex: "FF8FB7")],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                            } else {
+                                Color.clear
+                            }
+                        }
+                    )
+                    .clipShape(Capsule())
+                    .shadow(color: selectedTab == tab ? Color(hex: "FFB7CC").opacity(0.28) : .clear, radius: 10, x: 0, y: 6)
                 }
+                .buttonStyle(.plain)
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.bottom, 6)
-        .background(Color.white.opacity(0.85))
-        .cornerRadius(16)
+        .padding(8)
+        .background(Color.white.opacity(0.78))
+        .cornerRadius(22)
         .overlay(
-            RoundedRectangle(cornerRadius: 16)
-                .stroke(Color.white.opacity(0.9), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 22)
+                .stroke(Color.white.opacity(0.92), lineWidth: 1)
         )
-        .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 3)
+        .shadow(color: Color.black.opacity(0.05), radius: 10, x: 0, y: 5)
         .padding(.horizontal, 20)
     }
-    
+
+    private var progressEmptyState: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Build your before-and-after story")
+                    .font(.custom("Didot", size: 32))
+                    .fontWeight(.bold)
+                    .foregroundColor(Color(hex: "2D2D2D"))
+
+                Text("Your Skin tab gets dramatically more useful after the first check-in. Start once, then watch GlowUp turn weekly photos into comparisons, score shifts, and a timeline you can actually follow.")
+                    .font(.system(size: 14.5, weight: .medium))
+                    .foregroundColor(Color(hex: "6E6870"))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            PotentialGlowPreviewCard()
+
+            HStack(spacing: 12) {
+                progressPreviewBenefit(
+                    icon: "square.split.2x1",
+                    title: "Compare",
+                    subtitle: "Before and after visuals"
+                )
+                progressPreviewBenefit(
+                    icon: "chart.line.uptrend.xyaxis",
+                    title: "Track",
+                    subtitle: "See score trends build"
+                )
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                progressEmptyBullet("Add one clear front-facing selfie in daylight.")
+                progressEmptyBullet("Repeat in similar lighting every 7-14 days.")
+                progressEmptyBullet("Use the timeline to see what your routine is actually changing.")
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.white.opacity(0.9))
+            .overlay(
+                RoundedRectangle(cornerRadius: 18)
+                    .stroke(Color(hex: "F0E2EA"), lineWidth: 1)
+            )
+            .cornerRadius(18)
+
+            PhotosPicker(
+                selection: $selectedTimelinePhotoItem,
+                matching: .images,
+                preferredItemEncoding: .automatic
+            ) {
+                HStack(spacing: 10) {
+                    Image(systemName: isUploadingTimelinePhoto ? "hourglass.circle.fill" : "camera.fill")
+                    Text(isUploadingTimelinePhoto ? "Uploading check-in..." : "Upload My First Check-In")
+                        .font(.system(size: 15, weight: .bold))
+                }
+                .foregroundColor(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 15)
+                .background(
+                    LinearGradient(
+                        colors: [Color(hex: "FF5C95"), Color(hex: "FF8FB7")],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+                .cornerRadius(16)
+            }
+            .disabled(isUploadingTimelinePhoto)
+
+            VStack(alignment: .leading, spacing: 6) {
+                if let timelineStatusMessage {
+                    Text(timelineStatusMessage)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(timelineStatusIsError ? Color(hex: "D64545") : Color(hex: "3B8F68"))
+                }
+
+                Text("Illustrative preview only. Real changes depend on consistency, lighting, and the routine you follow.")
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundColor(Color(hex: "9D97A0"))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(22)
+        .background(Color(hex: "FFF7FB").opacity(0.98))
+        .overlay(
+            RoundedRectangle(cornerRadius: 24)
+                .stroke(Color(hex: "F1E4EC"), lineWidth: 1)
+        )
+        .cornerRadius(24)
+        .shadow(color: Color(hex: "FFB7CC").opacity(0.16), radius: 18, x: 0, y: 10)
+    }
+
+    private func progressPreviewBenefit(icon: String, title: String, subtitle: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ZStack {
+                Circle()
+                    .fill(Color(hex: "FFE6EF"))
+                    .frame(width: 34, height: 34)
+                Image(systemName: icon)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(Color(hex: "FF5C95"))
+            }
+
+            Text(title)
+                .font(.system(size: 14, weight: .bold))
+                .foregroundColor(Color(hex: "2D2D2D"))
+
+            Text(subtitle)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(Color(hex: "7A757D"))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, minHeight: 116, alignment: .topLeading)
+        .padding(14)
+        .background(Color.white.opacity(0.92))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18)
+                .stroke(Color(hex: "F0E2EA"), lineWidth: 1)
+        )
+        .cornerRadius(18)
+    }
+
     // MARK: - Routine Content
     private var routineContent: some View {
         VStack(spacing: 18) {
@@ -1024,6 +1217,18 @@ struct SkinView: View {
                     .background(isEvening ? Color.white.opacity(0.2) : Color(hex: "F5F5F7"))
                     .cornerRadius(8)
 
+                Button(action: {
+                    routineEditorType = routineType == "morning" ? .morning : .evening
+                }) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundColor(isEvening ? .white : Color(hex: "666666"))
+                        .padding(7)
+                        .background(isEvening ? Color.white.opacity(0.16) : Color(hex: "F3F3F6"))
+                        .clipShape(Circle())
+                }
+                .buttonStyle(.plain)
+
                 if routineSharingEnabled {
                     Button(action: { prepareRoutineShare(routineType: routineType, fallbackTitle: title, fallbackSteps: steps) }) {
                         Image(systemName: "square.and.arrow.up")
@@ -1073,7 +1278,7 @@ struct SkinView: View {
                     StarryBackground()
                 } else if isMorning {
                     LinearGradient(
-                        colors: [Color(hex: "FFF9E6"), Color.white],
+                        colors: [Color(hex: "FFEAAE"), Color(hex: "FFF5D8"), Color.white],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     )
@@ -1238,90 +1443,6 @@ struct SkinView: View {
                     .padding(.horizontal, 20)
             }
         }
-    }
-
-    private var progressEmptyState: some View {
-        VStack(spacing: 20) {
-            VStack(spacing: 10) {
-                ZStack {
-                    Circle()
-                        .fill(
-                            LinearGradient(
-                                colors: [Color(hex: "FFE7F0"), Color(hex: "FFD8E8")],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
-                        .frame(width: 74, height: 74)
-                    Image(systemName: "camera.badge.ellipsis")
-                        .font(.system(size: 30, weight: .semibold))
-                        .foregroundColor(Color(hex: "FF5C95"))
-                }
-
-                Text("Start Your Glow Timeline")
-                    .font(.system(size: 24, weight: .bold, design: .rounded))
-                        .foregroundColor(Color(hex: "2D2D2D"))
-                    .multilineTextAlignment(.center)
-
-                Text("Upload your first check-in photo so GlowUp can track real progress, score trends, and before/after improvements.")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(Color(hex: "8A8A92"))
-                    .multilineTextAlignment(.center)
-            }
-            .padding(.top, 12)
-
-            VStack(alignment: .leading, spacing: 10) {
-                progressEmptyBullet("Take a front-facing selfie in daylight")
-                progressEmptyBullet("Repeat every 7-14 days")
-                progressEmptyBullet("Compare score + visual changes over time")
-            }
-            .padding(14)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.white.opacity(0.9))
-            .overlay(
-                RoundedRectangle(cornerRadius: 14)
-                    .stroke(Color(hex: "F0E2EA"), lineWidth: 1)
-            )
-            .cornerRadius(14)
-
-            PhotosPicker(
-                selection: $selectedTimelinePhotoItem,
-                matching: .images,
-                preferredItemEncoding: .automatic
-            ) {
-                HStack(spacing: 8) {
-                    Image(systemName: isUploadingTimelinePhoto ? "hourglass" : "plus.circle.fill")
-                    Text(isUploadingTimelinePhoto ? "Uploading..." : "Add First Progress Photo")
-                        .font(.system(size: 15, weight: .bold))
-                }
-                .foregroundColor(.white)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 14)
-                .background(
-                    LinearGradient(
-                        colors: [Color(hex: "FF5C95"), Color(hex: "FF8FB7")],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                )
-                .cornerRadius(14)
-            }
-            .disabled(isUploadingTimelinePhoto)
-
-            if let timelineStatusMessage {
-                Text(timelineStatusMessage)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(timelineStatusIsError ? Color(hex: "D64545") : Color(hex: "3B8F68"))
-                    .multilineTextAlignment(.center)
-                    }
-                }
-                .padding(18)
-        .background(Color(hex: "FFF7FB").opacity(0.96))
-        .overlay(
-            RoundedRectangle(cornerRadius: 20)
-                .stroke(Color(hex: "F1E4EC"), lineWidth: 1)
-        )
-        .cornerRadius(20)
     }
 
     private func progressEmptyBullet(_ text: String) -> some View {
@@ -2123,6 +2244,278 @@ struct TimelineRemoteImage: View {
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundColor(Color(hex: "A9A2AA"))
         }
+    }
+}
+
+private enum GlowIllustrationPhase {
+    case before
+    case after
+
+    var title: String {
+        switch self {
+        case .before:
+            return "Before"
+        case .after:
+            return "After"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .before:
+            return "Starting point"
+        case .after:
+            return "Potential with consistency"
+        }
+    }
+
+    var accent: Color {
+        switch self {
+        case .before:
+            return Color(hex: "A8A1A9")
+        case .after:
+            return Color(hex: "FF6B9D")
+        }
+    }
+
+    var background: [Color] {
+        switch self {
+        case .before:
+            return [Color(hex: "F4F0F3"), Color(hex: "E9E2E8")]
+        case .after:
+            return [Color(hex: "FFF0F6"), Color(hex: "FFDDEB")]
+        }
+    }
+
+    var faceTone: Color {
+        switch self {
+        case .before:
+            return Color(hex: "D3CDD3")
+        case .after:
+            return Color(hex: "F0D6DA")
+        }
+    }
+
+    var hairTone: Color {
+        switch self {
+        case .before:
+            return Color(hex: "8F8790")
+        case .after:
+            return Color(hex: "7F5464")
+        }
+    }
+}
+
+private struct PotentialGlowPreviewCard: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Text("Illustrative preview")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundColor(Color(hex: "7A6A73"))
+                    .textCase(.uppercase)
+                    .tracking(1.0)
+
+                Spacer()
+
+                HStack(spacing: 6) {
+                    Image(systemName: "slider.horizontal.3")
+                    Text("Before / after")
+                }
+                .font(.system(size: 11.5, weight: .semibold))
+                .foregroundColor(Color(hex: "FF5C95"))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(Color.white.opacity(0.8))
+                .clipShape(Capsule())
+            }
+
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) {
+                    GlowIllustrationCard(phase: .before)
+                    previewArrow
+                    GlowIllustrationCard(phase: .after)
+                }
+
+                VStack(spacing: 12) {
+                    GlowIllustrationCard(phase: .before)
+                    previewArrow
+                    GlowIllustrationCard(phase: .after)
+                }
+            }
+        }
+        .padding(16)
+        .background(
+            LinearGradient(
+                colors: [Color.white.opacity(0.92), Color(hex: "FFF2F8")],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 22)
+                .stroke(Color(hex: "F1DFE8"), lineWidth: 1)
+        )
+        .cornerRadius(22)
+    }
+
+    private var previewArrow: some View {
+        ZStack {
+            Circle()
+                .fill(Color.white.opacity(0.95))
+                .frame(width: 38, height: 38)
+            Image(systemName: "arrow.right")
+                .font(.system(size: 14, weight: .bold))
+                .foregroundColor(Color(hex: "FF6B9D"))
+        }
+        .shadow(color: Color.black.opacity(0.06), radius: 6, x: 0, y: 3)
+    }
+}
+
+private struct GlowIllustrationCard: View {
+    let phase: GlowIllustrationPhase
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ZStack(alignment: .topLeading) {
+                RoundedRectangle(cornerRadius: 22)
+                    .fill(
+                        LinearGradient(
+                            colors: phase.background,
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .frame(maxWidth: .infinity)
+                    .aspectRatio(0.82, contentMode: .fit)
+
+                RoundedRectangle(cornerRadius: 22)
+                    .stroke(Color.white.opacity(0.55), lineWidth: 1)
+
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(phase.title)
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundColor(phase == .before ? Color(hex: "6C646D") : Color(hex: "C43D73"))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color.white.opacity(0.86))
+                        .clipShape(Capsule())
+
+                    Spacer()
+                }
+                .padding(12)
+
+                VStack {
+                    Spacer(minLength: 0)
+                    GlowFaceIllustration(phase: phase)
+                        .padding(.horizontal, 18)
+                        .padding(.bottom, 18)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(phase.subtitle)
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundColor(Color(hex: "2D2D2D"))
+
+                Text(phase == .before ? "Blank timeline, no visual checkpoints yet." : "Mock preview of smoother, brighter progress photos.")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(Color(hex: "7B767E"))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.horizontal, 2)
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+}
+
+private struct GlowFaceIllustration: View {
+    let phase: GlowIllustrationPhase
+
+    var body: some View {
+        GeometryReader { proxy in
+            let width = proxy.size.width
+            let faceSize = width * 0.42
+            let bodyWidth = width * 0.58
+            let bodyHeight = width * 0.5
+
+            ZStack {
+                Circle()
+                    .fill(phase.hairTone.opacity(0.38))
+                    .frame(width: faceSize * 1.1, height: faceSize * 1.02)
+                    .offset(y: -faceSize * 0.12)
+
+                RoundedRectangle(cornerRadius: bodyHeight * 0.34, style: .continuous)
+                    .fill(phase.faceTone.opacity(0.96))
+                    .frame(width: bodyWidth, height: bodyHeight)
+                    .offset(y: bodyHeight * 0.48)
+
+                Circle()
+                    .fill(phase.faceTone)
+                    .frame(width: faceSize, height: faceSize)
+                    .offset(y: -faceSize * 0.02)
+
+                RoundedRectangle(cornerRadius: faceSize * 0.42, style: .continuous)
+                    .fill(phase.hairTone)
+                    .frame(width: faceSize * 1.06, height: faceSize * 0.56)
+                    .offset(y: -faceSize * 0.38)
+
+                HStack(spacing: faceSize * 0.18) {
+                    Capsule()
+                        .fill(Color.black.opacity(0.35))
+                        .frame(width: faceSize * 0.12, height: faceSize * 0.035)
+                    Capsule()
+                        .fill(Color.black.opacity(0.35))
+                        .frame(width: faceSize * 0.12, height: faceSize * 0.035)
+                }
+                .offset(y: -faceSize * 0.06)
+
+                Capsule()
+                    .fill(Color.black.opacity(0.14))
+                    .frame(width: faceSize * 0.08, height: faceSize * 0.17)
+                    .offset(y: faceSize * 0.08)
+
+                Capsule()
+                    .fill(Color.black.opacity(0.24))
+                    .frame(width: faceSize * 0.26, height: faceSize * 0.06)
+                    .offset(y: faceSize * 0.24)
+
+                if phase == .before {
+                    Group {
+                        Circle()
+                            .fill(Color.black.opacity(0.08))
+                            .frame(width: faceSize * 0.1, height: faceSize * 0.1)
+                            .offset(x: -faceSize * 0.18, y: faceSize * 0.1)
+                        Circle()
+                            .fill(Color.black.opacity(0.06))
+                            .frame(width: faceSize * 0.08, height: faceSize * 0.08)
+                            .offset(x: faceSize * 0.2, y: faceSize * 0.03)
+                        Circle()
+                            .stroke(Color.white.opacity(0.34), lineWidth: 1)
+                            .frame(width: faceSize * 1.2, height: faceSize * 1.2)
+                    }
+                } else {
+                    Group {
+                        Circle()
+                            .fill(Color(hex: "FFB6CE").opacity(0.40))
+                            .frame(width: faceSize * 0.18, height: faceSize * 0.12)
+                            .blur(radius: 4)
+                            .offset(x: -faceSize * 0.22, y: faceSize * 0.1)
+                        Circle()
+                            .fill(Color(hex: "FFB6CE").opacity(0.40))
+                            .frame(width: faceSize * 0.18, height: faceSize * 0.12)
+                            .blur(radius: 4)
+                            .offset(x: faceSize * 0.22, y: faceSize * 0.1)
+                        Image(systemName: "sparkles")
+                            .font(.system(size: faceSize * 0.18, weight: .bold))
+                            .foregroundColor(Color(hex: "FF6B9D"))
+                            .offset(x: faceSize * 0.42, y: -faceSize * 0.18)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .aspectRatio(1, contentMode: .fit)
     }
 }
 

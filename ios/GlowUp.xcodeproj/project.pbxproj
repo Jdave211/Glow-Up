@@ -24,7 +24,6 @@
 		A100000E /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000E /* HomeView.swift */; };
 		A100000F /* CartView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000F /* CartView.swift */; };
 		A1000010 /* SkinView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000010 /* SkinView.swift */; };
-		A1000011 /* PaymentHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000011 /* PaymentHandler.swift */; };
 		A1000012 /* SubscriptionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000012 /* SubscriptionManager.swift */; };
 /* End PBXBuildFile section */
 
@@ -47,7 +46,6 @@
 		A200000E /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
 		A200000F /* CartView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CartView.swift; sourceTree = "<group>"; };
 		A2000010 /* SkinView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkinView.swift; sourceTree = "<group>"; };
-		A2000011 /* PaymentHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaymentHandler.swift; sourceTree = "<group>"; };
 		A2000012 /* SubscriptionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubscriptionManager.swift; sourceTree = "<group>"; };
 		A3000001 /* GlowUp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = GlowUp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -96,7 +94,6 @@
 				A200000F /* CartView.swift */,
 				A2000010 /* SkinView.swift */,
 				447E94372F3E977B00908C30 /* PremiumPaywallView.swift */,
-				A2000011 /* PaymentHandler.swift */,
 				A2000012 /* SubscriptionManager.swift */,
 				A2000007 /* APIService.swift */,
 				A2000008 /* Models.swift */,
@@ -195,7 +192,6 @@
 				A100000E /* HomeView.swift in Sources */,
 				A100000F /* CartView.swift in Sources */,
 				A1000010 /* SkinView.swift in Sources */,
-				A1000011 /* PaymentHandler.swift in Sources */,
 				A1000012 /* SubscriptionManager.swift in Sources */,
 				A1000007 /* APIService.swift in Sources */,
 				A1000008 /* Models.swift in Sources */,

@@ -395,6 +395,7 @@ class APIService {
         let frequency: String
         let product_id: String?
         let product_name: String?
+        let product_brand: String?
     }
 
     private struct RoutineUpdateRequest: Codable {
@@ -681,6 +682,33 @@ class APIService {
             throw APIError.decodingError
         }
         return checkIn
+    }
+    
+    func deletePhotoCheckIn(userId: String, checkInId: String) async throws {
+        guard let url = URL(string: "\(baseURL)/api/photo-check-ins/\(checkInId)") else {
+            throw APIError.invalidURL
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 30
+        
+        let body: [String: Any] = ["userId": userId]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw APIError.serverError
+        }
+        
+        guard httpResponse.statusCode == 200 else {
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let message = json["error"] as? String {
+                throw APIError.serverMessage(message)
+            }
+            throw APIError.serverError
+        }
     }
     
     // MARK: - Routine Check-ins

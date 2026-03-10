@@ -18,8 +18,8 @@ final class SubscriptionManager: ObservableObject {
 
         var fallbackPrice: String {
             switch self {
-            case .weekly: return "$1.99"
-            case .monthly: return "$4.99"
+            case .weekly: return "$2.99"
+            case .monthly: return "$6.99"
             }
         }
     }
@@ -43,6 +43,8 @@ final class SubscriptionManager: ObservableObject {
     ]
 
     private var updatesTask: Task<Void, Never>?
+    private var lastSyncedSubscriptionSignature: String?
+    private var subscriptionSyncInFlightSignature: String?
 
     private var bundleDerivedWeeklyProductId: String? {
         guard let bundleId = Bundle.main.bundleIdentifier, !bundleId.isEmpty else { return nil }
@@ -196,23 +198,35 @@ final class SubscriptionManager: ObservableObject {
     }
 
     func refreshEntitlements() async {
-        var hasActivePremium = false
+        var activeSnapshot: ActiveSubscriptionSnapshot?
         let validProductIds = Set(candidateProductIds + [weeklyProduct?.id, monthlyProduct?.id].compactMap { $0 })
 
         for await verificationResult in Transaction.currentEntitlements {
             guard let transaction = try? checkVerified(verificationResult) else { continue }
-            if validProductIds.contains(transaction.productID) && transaction.revocationDate == nil {
-                if let expirationDate = transaction.expirationDate {
-                    hasActivePremium = expirationDate > Date()
-                } else {
-                    hasActivePremium = true
-                }
+            guard validProductIds.contains(transaction.productID) else { continue }
+            guard transaction.revocationDate == nil else { continue }
+
+            if let expirationDate = transaction.expirationDate, expirationDate <= Date() {
+                continue
             }
-            if hasActivePremium { break }
+
+            let candidate = ActiveSubscriptionSnapshot(
+                productId: transaction.productID,
+                expiresAt: transaction.expirationDate,
+                purchaseDate: transaction.purchaseDate,
+                transactionId: String(transaction.id),
+                originalTransactionId: String(transaction.originalID),
+                plan: inferPlan(forProductId: transaction.productID)
+            )
+            if shouldPrefer(candidate, over: activeSnapshot) {
+                activeSnapshot = candidate
+            }
         }
 
+        let hasActivePremium = activeSnapshot != nil
         isPremium = hasActivePremium
         SessionManager.shared.isPremium = hasActivePremium
+        syncSubscriptionStateToBackend(snapshot: activeSnapshot, isPremium: hasActivePremium)
     }
 
     private func product(for plan: Plan) -> StoreKit.Product? {
@@ -256,6 +270,85 @@ final class SubscriptionManager: ObservableObject {
         case .verified(let safe):
             return safe
         }
+    }
+
+    private func inferPlan(forProductId productId: String) -> Plan? {
+        if productId == weeklyProduct?.id || productId == weeklyProductId || productId.localizedCaseInsensitiveContains("week") {
+            return .weekly
+        }
+        if productId == monthlyProduct?.id || productId == monthlyProductId || productId.localizedCaseInsensitiveContains("month") {
+            return .monthly
+        }
+        return nil
+    }
+
+    private func shouldPrefer(_ candidate: ActiveSubscriptionSnapshot, over current: ActiveSubscriptionSnapshot?) -> Bool {
+        guard let current else { return true }
+
+        let candidateExpiry = candidate.expiresAt ?? .distantFuture
+        let currentExpiry = current.expiresAt ?? .distantFuture
+        if candidateExpiry != currentExpiry {
+            return candidateExpiry > currentExpiry
+        }
+        return candidate.purchaseDate > current.purchaseDate
+    }
+
+    private func syncSubscriptionStateToBackend(snapshot: ActiveSubscriptionSnapshot?, isPremium: Bool) {
+        guard let userId = SessionManager.shared.userId else { return }
+
+        let signature = snapshot?.signature ?? "inactive"
+        if signature == lastSyncedSubscriptionSignature || signature == subscriptionSyncInFlightSignature {
+            return
+        }
+
+        subscriptionSyncInFlightSignature = signature
+
+        let formatter = ISO8601DateFormatter()
+        let payload = SupabaseService.SubscriptionSyncPayload(
+            isPremium: isPremium,
+            plan: snapshot?.plan?.rawValue,
+            productId: snapshot?.productId,
+            expiresAt: snapshot?.expiresAt.map { formatter.string(from: $0) },
+            lastVerifiedAt: formatter.string(from: Date()),
+            transactionId: snapshot?.transactionId,
+            originalTransactionId: snapshot?.originalTransactionId,
+            environment: nil
+        )
+
+        Task.detached(priority: .utility) { [weak self] in
+            var didSync = false
+            do {
+                didSync = try await SupabaseService.shared.syncUserSubscriptionStatus(userId: userId, payload: payload)
+            } catch {
+                #if DEBUG
+                print("⚠️ Subscription sync failed:", error.localizedDescription)
+                #endif
+            }
+
+            await MainActor.run {
+                guard let self else { return }
+                if didSync {
+                    self.lastSyncedSubscriptionSignature = signature
+                }
+                if self.subscriptionSyncInFlightSignature == signature {
+                    self.subscriptionSyncInFlightSignature = nil
+                }
+            }
+        }
+    }
+}
+
+private struct ActiveSubscriptionSnapshot {
+    let productId: String
+    let expiresAt: Date?
+    let purchaseDate: Date
+    let transactionId: String
+    let originalTransactionId: String
+    let plan: SubscriptionManager.Plan?
+
+    var signature: String {
+        let expirationToken = expiresAt.map { String($0.timeIntervalSince1970) } ?? "none"
+        return [productId, expirationToken, transactionId, originalTransactionId].joined(separator: "|")
     }
 }
 

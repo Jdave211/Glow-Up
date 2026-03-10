@@ -1,6 +1,8 @@
 import SwiftUI
 import MapKit
 import UserNotifications
+import StoreKit
+import UIKit
 
 struct MainTabView: View {
     let analysisResult: AnalysisResult
@@ -193,6 +195,11 @@ struct ChatView: View {
     
     private var userId: String? { SessionManager.shared.userId }
     var isEmpty: Bool { chatSession.currentChat.isEmpty }
+    private let starterPrompts = [
+        "What should I improve first based on my current routine?",
+        "Build me a simple morning routine I can actually stick to.",
+        "Explain what my glow score is really telling me."
+    ]
     private var contentMaxWidth: CGFloat {
         horizontalSizeClass == .regular ? 820 : .infinity
     }
@@ -310,29 +317,79 @@ struct ChatView: View {
     // ────────────────────────────────────────
     private var emptyState: some View {
         VStack(spacing: 0) {
-            Spacer()
+            Spacer(minLength: 28)
+
             VStack(spacing: 20) {
                 ZStack {
                     Circle()
-                        .fill(Color(hex: "FFE0EC").opacity(0.6))
-                        .frame(width: 64, height: 64)
+                        .fill(
+                            LinearGradient(
+                                colors: [Color(hex: "FFE2EE"), Color(hex: "FFD3E4")],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .frame(width: 74, height: 74)
                     Image(systemName: "sparkles")
-                        .font(.system(size: 26))
-                        .foregroundColor(Color(hex: "FF6B9D"))
+                        .font(.system(size: 28, weight: .semibold))
+                        .foregroundColor(Color(hex: "FF5C95"))
                 }
-                Text("Start a new chat")
-                    .font(.system(size: 22, weight: .semibold))
-                    .foregroundColor(Color(hex: "2D2D2D"))
-                Text("Ask GlowUp AI what your photos suggest to improve,\nthen get technique + product recommendations.")
-                    .font(.system(size: 15))
-                    .foregroundColor(Color(hex: "999999"))
-                    .multilineTextAlignment(.center)
-                    .lineSpacing(4)
+
+                VStack(spacing: 10) {
+                    Text("Ask one sharp question")
+                        .font(.custom("Didot", size: 34))
+                        .fontWeight(.bold)
+                        .foregroundColor(Color(hex: "2D2D2D"))
+
+                    Text("GlowUp is strongest when you ask about what to improve first, how to simplify your routine, or why your score looks the way it does.")
+                        .font(.system(size: 14.5, weight: .medium))
+                        .foregroundColor(Color(hex: "8D8590"))
+                        .multilineTextAlignment(.center)
+                        .lineSpacing(3)
+                }
+
+                VStack(spacing: 12) {
+                    ForEach(starterPrompts, id: \.self) { prompt in
+                        starterPromptButton(prompt)
+                    }
+                }
             }
-            Spacer()
+
             Spacer()
         }
-        .padding(.horizontal, 40)
+        .padding(.horizontal, horizontalSizeClass == .regular ? 90 : 24)
+        .padding(.bottom, 18)
+    }
+
+    private func starterPromptButton(_ prompt: String) -> some View {
+        Button(action: { send(messageOverride: prompt) }) {
+            HStack(spacing: 12) {
+                ZStack {
+                    Circle()
+                        .fill(Color(hex: "FFE8F1"))
+                        .frame(width: 34, height: 34)
+                    Image(systemName: "arrow.up.right")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundColor(Color(hex: "FF5C95"))
+                }
+
+                Text(prompt)
+                    .font(.system(size: 14.5, weight: .semibold))
+                    .foregroundColor(Color(hex: "2D2D2D"))
+                    .multilineTextAlignment(.leading)
+
+                Spacer(minLength: 8)
+            }
+            .padding(14)
+            .background(Color.white.opacity(0.92))
+            .overlay(
+                RoundedRectangle(cornerRadius: 18)
+                    .stroke(Color(hex: "F0E2E8"), lineWidth: 1)
+            )
+            .cornerRadius(18)
+            .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 4)
+        }
+        .buttonStyle(.plain)
     }
     
     // ────────────────────────────────────────
@@ -1349,6 +1406,7 @@ struct SettingsView: View {
     private let supportURL = URL(string: "https://boiled-education-5d3.notion.site/GlowUp-Support-b4226f97acba41e3bd4803fa1d0624fb?source=copy_link")!
 
     var onSignOut: (() -> Void)?
+    @ObservedObject private var subscriptionManager = SubscriptionManager.shared
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.openURL) private var openURL
     @AppStorage("glowup.notifications.enabled") private var notificationsEnabled = true
@@ -1386,14 +1444,14 @@ struct SettingsView: View {
 
                 // Premium Section
                 settingsSection(title: "Membership", subtitle: nil) { // Removed subtitle from section header to reduce clutter
-                    Button(action: { showPaywall = true }) {
+                    Button(action: { handleMembershipTap() }) {
                         HStack(spacing: 16) {
                             // Icon with glowing effect
                             ZStack {
                                 Circle()
                                     .fill(
                                         LinearGradient(
-                                            colors: SessionManager.shared.isPremium ? 
+                                            colors: subscriptionManager.isPremium ? 
                                                 [Color(hex: "FFD700"), Color(hex: "FFA500")] : 
                                                 [Color(hex: "FF6B9D"), Color(hex: "FF8FB7")],
                                             startPoint: .topLeading,
@@ -1401,9 +1459,9 @@ struct SettingsView: View {
                                         )
                                     )
                                     .frame(width: 48, height: 48)
-                                    .shadow(color: (SessionManager.shared.isPremium ? Color.orange : Color(hex: "FF6B9D")).opacity(0.25), radius: 8, x: 0, y: 4)
+                                    .shadow(color: (subscriptionManager.isPremium ? Color.orange : Color(hex: "FF6B9D")).opacity(0.25), radius: 8, x: 0, y: 4)
                                 
-                                Image(systemName: SessionManager.shared.isPremium ? "crown.fill" : "sparkles")
+                                Image(systemName: subscriptionManager.isPremium ? "crown.fill" : "sparkles")
                                     .font(.system(size: 20, weight: .semibold))
                                     .foregroundColor(.white)
                                     .symbolEffect(.bounce, value: showPaywall)
@@ -1411,18 +1469,18 @@ struct SettingsView: View {
                             
                             VStack(alignment: .leading, spacing: 4) {
                                 HStack(spacing: 6) {
-                                    Text(SessionManager.shared.isPremium ? "GlowUp+ Active" : "Get GlowUp+")
+                                    Text(subscriptionManager.isPremium ? "GlowUp+ Active" : "Get GlowUp+")
                                         .font(.system(size: 17, weight: .bold)) // Slightly larger
                                         .foregroundColor(Color(hex: "1A1D2B"))
                                     
-                                    if SessionManager.shared.isPremium {
+                                    if subscriptionManager.isPremium {
                                         Image(systemName: "checkmark.seal.fill")
                                             .font(.system(size: 14))
                                             .foregroundColor(Color(hex: "FFD700"))
                                     }
                                 }
                                 
-                                Text(SessionManager.shared.isPremium ? "Manage subscription" : "Unlock unlimited analysis & matches")
+                                Text(subscriptionManager.isPremium ? "Manage subscription" : "Unlock unlimited analysis & matches")
                                     .font(.system(size: 13, weight: .medium))
                                     .foregroundColor(Color(hex: "8A92A6"))
                                     .lineLimit(1)
@@ -1430,7 +1488,7 @@ struct SettingsView: View {
                             
                             Spacer()
                             
-                            if !SessionManager.shared.isPremium {
+                            if !subscriptionManager.isPremium {
                                 Text("UPGRADE")
                                     .font(.system(size: 11, weight: .heavy))
                                     .foregroundColor(.white)
@@ -1748,6 +1806,36 @@ struct SettingsView: View {
             routineReminders = false
             photoReminders = false
             NotificationManager.shared.clearAll()
+        }
+    }
+
+    private func handleMembershipTap() {
+        if subscriptionManager.isPremium {
+            openManageSubscriptions()
+        } else {
+            showPaywall = true
+        }
+    }
+
+    private func openManageSubscriptions() {
+        Task {
+            if let scene = UIApplication.shared.connectedScenes.first(where: { $0.activationState == .foregroundActive }) as? UIWindowScene {
+                do {
+                    try await AppStore.showManageSubscriptions(in: scene)
+                    return
+                } catch {
+                    #if DEBUG
+                    print("⚠️ AppStore.manageSubscriptions failed:", error.localizedDescription)
+                    #endif
+                }
+            }
+
+            if let fallbackURL = URL(string: "https://apps.apple.com/account/subscriptions") {
+                openURL(fallbackURL)
+            } else {
+                notificationAlertMessage = "Couldn't open your App Store subscription settings."
+                showNotificationAlert = true
+            }
         }
     }
     
@@ -2727,7 +2815,7 @@ final class CartManager: ObservableObject {
 
     // ── Flush: persist all pending changes to DB ──
 
-    /// Call this when the user dismisses the cart/quick-buy or taps Apple Pay
+    /// Call this when the user dismisses the cart/quick-buy or completes checkout
     func flushPendingChanges() {
         guard let userId = SessionManager.shared.userId else { return }
         

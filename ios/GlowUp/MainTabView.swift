@@ -1432,6 +1432,7 @@ struct SettingsView: View {
     @State private var isDeletingAccount = false
     @State private var showLooksSheet = false
     @State private var showPaywall = false
+    @State private var showMembershipManagementSheet = false
     @State private var showNotificationAlert = false
     @State private var notificationAlertMessage = ""
 
@@ -1759,6 +1760,11 @@ struct SettingsView: View {
         .sheet(isPresented: $showPaywall) {
             PremiumPaywallView()
         }
+        .sheet(isPresented: $showMembershipManagementSheet) {
+            SubscriptionManagementSheet()
+                .presentationDetents([.height(420), .medium])
+                .presentationDragIndicator(.visible)
+        }
         .sheet(isPresented: $showLooksSheet) {
             SkincareSettingsSheet()
                 .presentationDetents([.medium, .large])
@@ -1827,61 +1833,9 @@ struct SettingsView: View {
 
     private func handleMembershipTap() {
         if subscriptionManager.isPremium {
-            openManageSubscriptions()
+            showMembershipManagementSheet = true
         } else {
             showPaywall = true
-        }
-    }
-
-    private func openManageSubscriptions() {
-        Task {
-            #if targetEnvironment(simulator)
-            openManageSubscriptionsFallback()
-            #else
-            if let scene = UIApplication.shared.connectedScenes.first(where: { $0.activationState == .foregroundActive }) as? UIWindowScene {
-                let didOpen = await openManageSubscriptionsWithTimeout(in: scene)
-                if didOpen {
-                    return
-                }
-            }
-
-            openManageSubscriptionsFallback()
-            #endif
-        }
-    }
-
-    @MainActor
-    private func openManageSubscriptionsFallback() {
-        if let fallbackURL = URL(string: "https://apps.apple.com/account/subscriptions") {
-            openURL(fallbackURL)
-        } else {
-            notificationAlertMessage = "Couldn't open your App Store subscription settings."
-            showNotificationAlert = true
-        }
-    }
-
-    private func openManageSubscriptionsWithTimeout(in scene: UIWindowScene) async -> Bool {
-        await withTaskGroup(of: Bool.self) { group in
-            group.addTask {
-                do {
-                    try await AppStore.showManageSubscriptions(in: scene)
-                    return true
-                } catch {
-                    #if DEBUG
-                    print("⚠️ AppStore.manageSubscriptions failed:", error.localizedDescription)
-                    #endif
-                    return false
-                }
-            }
-
-            group.addTask {
-                try? await Task.sleep(nanoseconds: 3_000_000_000)
-                return false
-            }
-
-            let firstResult = await group.next() ?? false
-            group.cancelAll()
-            return firstResult
         }
     }
     
@@ -1949,6 +1903,135 @@ struct SettingsView: View {
         }
     }
     
+}
+
+struct SubscriptionManagementSheet: View {
+    private let manageSubscriptionsURL = URL(string: "https://apps.apple.com/account/subscriptions")!
+    private let billingHistoryURL = URL(string: "https://reportaproblem.apple.com/")!
+
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
+    @ObservedObject private var subscriptionManager = SubscriptionManager.shared
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Manage GlowUp+")
+                        .font(.custom("Didot", size: 30))
+                        .fontWeight(.bold)
+                        .foregroundColor(Color(hex: "1A1D2B"))
+
+                    Text(subscriptionManager.isPremium
+                         ? "Your subscription is billed and managed by Apple."
+                         : "Subscription controls are handled through your App Store account.")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(Color(hex: "6B7280"))
+                }
+
+                VStack(spacing: 12) {
+                    SubscriptionManagementActionRow(
+                        icon: "creditcard.fill",
+                        iconColor: Color(hex: "FF8FB7"),
+                        title: "Billing & Receipts",
+                        subtitle: "View Apple charges and purchase history",
+                        action: { openExternal(billingHistoryURL) }
+                    )
+
+                    SubscriptionManagementActionRow(
+                        icon: "slider.horizontal.3",
+                        iconColor: Color(hex: "8B5CF6"),
+                        title: "Manage Plan",
+                        subtitle: "Switch plans or review renewal details",
+                        action: { openExternal(manageSubscriptionsURL) }
+                    )
+
+                    SubscriptionManagementActionRow(
+                        icon: "xmark.circle.fill",
+                        iconColor: Color(hex: "EF4444"),
+                        title: "Cancel Subscription",
+                        subtitle: "Turn off auto-renew in App Store settings",
+                        action: { openExternal(manageSubscriptionsURL) }
+                    )
+                }
+
+                Text("GlowUp cannot cancel or edit App Store subscriptions directly inside the app.")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(Color(hex: "8A92A6"))
+                    .padding(.horizontal, 4)
+
+                Spacer(minLength: 0)
+            }
+            .padding(24)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background(
+                LinearGradient(
+                    colors: [Color(hex: "FFF7FA"), Color.white],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                .ignoresSafeArea()
+            )
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(Color(hex: "FF6B9D"))
+                }
+            }
+        }
+    }
+
+    private func openExternal(_ url: URL) {
+        dismiss()
+        openURL(url)
+    }
+}
+
+private struct SubscriptionManagementActionRow: View {
+    let icon: String
+    let iconColor: Color
+    let title: String
+    let subtitle: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 14) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(iconColor.opacity(0.12))
+                        .frame(width: 46, height: 46)
+
+                    Image(systemName: icon)
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundColor(iconColor)
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(Color(hex: "1A1D2B"))
+
+                    Text(subtitle)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(Color(hex: "8A92A6"))
+                        .multilineTextAlignment(.leading)
+                }
+
+                Spacer()
+
+                Image(systemName: "arrow.up.right.square")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundColor(Color(hex: "C4C4C4"))
+            }
+            .padding(16)
+            .background(Color.white)
+            .cornerRadius(20)
+            .shadow(color: Color.black.opacity(0.05), radius: 10, x: 0, y: 4)
+        }
+        .buttonStyle(.plain)
+    }
 }
 
 struct SettingsToggle: View {

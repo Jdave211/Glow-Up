@@ -1189,6 +1189,7 @@ async function searchProductsForRoutineEditor(query, userId, category, limit = 8
     const safeQuery = String(query || '').trim();
     const normalizedCategory = category ? String(category).toLowerCase() : undefined;
     const results = [];
+    const baseSelect = 'id, name, brand, price, category, summary, description, image_url, rating, buy_link, target_skin_type, target_concerns';
     let profile = null;
     if (userId) {
         profile = await supabase_1.DatabaseService.getSkinProfileByUserId(userId);
@@ -1212,26 +1213,57 @@ async function searchProductsForRoutineEditor(query, userId, category, limit = 8
         catch { }
     }
     const qTerm = safeQuery.replace(/[,%]/g, ' ').trim();
-    let dbQuery = supabase_1.supabase
-        .from('products')
-        .select('id, name, brand, price, category, summary, description, image_url, rating, buy_link, target_skin_type, target_concerns')
-        .order('rating', { ascending: false })
-        .limit(cappedLimit * 4);
-    if (normalizedCategory)
-        dbQuery = dbQuery.eq('category', normalizedCategory);
+    const queryTerms = qTerm.split(/\s+/).filter(Boolean).slice(0, 6);
+    const runFieldSearch = async (field, term) => {
+        let dbQuery = supabase_1.supabase
+            .from('products')
+            .select(baseSelect)
+            .ilike(field, `%${term}%`)
+            .order('rating', { ascending: false })
+            .limit(cappedLimit * 3);
+        if (normalizedCategory) {
+            dbQuery = dbQuery.ilike('category', normalizedCategory);
+        }
+        const { data } = await dbQuery;
+        if (data?.length) {
+            results.push(...data);
+        }
+    };
     if (qTerm.length > 0) {
-        dbQuery = dbQuery.or(`name.ilike.%${qTerm}%,brand.ilike.%${qTerm}%,summary.ilike.%${qTerm}%`);
+        await runFieldSearch('name', qTerm);
+        await runFieldSearch('brand', qTerm);
+        await runFieldSearch('summary', qTerm);
+        await runFieldSearch('description', qTerm);
+        if (results.length < cappedLimit) {
+            for (const term of queryTerms) {
+                await runFieldSearch('name', term);
+                await runFieldSearch('brand', term);
+                await runFieldSearch('summary', term);
+                if (results.length >= cappedLimit * 4)
+                    break;
+            }
+        }
     }
-    const { data: keywordResults } = await dbQuery;
-    if (keywordResults?.length) {
-        results.push(...keywordResults);
+    else {
+        let dbQuery = supabase_1.supabase
+            .from('products')
+            .select(baseSelect)
+            .order('rating', { ascending: false })
+            .limit(cappedLimit * 3);
+        if (normalizedCategory) {
+            dbQuery = dbQuery.ilike('category', normalizedCategory);
+        }
+        const { data } = await dbQuery;
+        if (data?.length) {
+            results.push(...data);
+        }
     }
     if (results.length < cappedLimit && qTerm.length > 0) {
         const tsQuery = qTerm.split(/\s+/).filter(Boolean).join(' | ');
         if (tsQuery.length > 0) {
             const { data: textResults } = await supabase_1.supabase
                 .from('products')
-                .select('id, name, brand, price, category, summary, description, image_url, rating, buy_link, target_skin_type, target_concerns')
+                .select(baseSelect)
                 .textSearch('search_vector', tsQuery)
                 .order('rating', { ascending: false })
                 .limit(cappedLimit * 3);
@@ -1673,7 +1705,26 @@ app.get('/share/routine/:token', async (req, res) => {
 // Get all products
 app.get('/api/products', async (req, res) => {
     try {
-        const products = await supabase_1.DatabaseService.getAllProducts();
+        const rawLimit = Number(req.query.limit || 50);
+        const limit = Math.max(1, Math.min(rawLimit, 200));
+        const search = String(req.query.search || '').trim().toLowerCase();
+        let products = await supabase_1.DatabaseService.getAllProducts();
+        if (search) {
+            const terms = search.split(/\s+/).filter(Boolean);
+            products = products.filter(product => {
+                const haystack = [
+                    product.name,
+                    product.brand,
+                    product.category,
+                    product.description,
+                ]
+                    .filter(Boolean)
+                    .join(' ')
+                    .toLowerCase();
+                return terms.every(term => haystack.includes(term));
+            });
+        }
+        products = products.slice(0, limit);
         res.json({ success: true, products });
     }
     catch (error) {
@@ -3612,6 +3663,26 @@ function normalizeLightweightMessages(raw, maxMessages) {
         return [];
     return normalized.slice(-maxMessages);
 }
+function isOpenAIQuotaError(error) {
+    const message = String(error?.message || '').toLowerCase();
+    const code = String(error?.code || error?.error?.code || '').toLowerCase();
+    const type = String(error?.type || error?.error?.type || '').toLowerCase();
+    const status = Number(error?.status || 0);
+    return (status === 429 ||
+        code === 'insufficient_quota' ||
+        type === 'insufficient_quota' ||
+        message.includes('insufficient_quota') ||
+        message.includes('exceeded your current quota'));
+}
+function quotaFallbackChatResponse() {
+    return {
+        success: true,
+        message: "GlowUp AI chat is temporarily unavailable right now. Your account, routine, progress tracking, and product browsing still work normally. Please try chat again later.",
+        products: [],
+        product_map: {},
+        actions: [],
+    };
+}
 app.post('/api/chat/guest', async (req, res) => {
     try {
         const messages = normalizeLightweightMessages(req.body?.messages, 8);
@@ -3927,6 +3998,9 @@ Rules:
     }
     catch (error) {
         console.error('❌ Chat error:', error?.message || error);
+        if (isOpenAIQuotaError(error)) {
+            return res.status(200).json(quotaFallbackChatResponse());
+        }
         res.status(500).json({
             error: 'Chat failed',
             message: "Sorry, I'm having trouble thinking right now. Try again in a moment! 💕"

@@ -108,6 +108,8 @@ class DatabaseService {
             subscriptionActive: false,
             status: 'inactive',
             plan: null,
+            periodUnit: null,
+            periodValue: null,
             productId: null,
             startedAt: null,
             expiresAt: null,
@@ -127,6 +129,8 @@ class DatabaseService {
                 subscriptionActive: active,
                 status: active ? 'active' : 'inactive',
                 plan: null,
+                periodUnit: null,
+                periodValue: null,
                 productId: null,
                 startedAt: null,
                 expiresAt: null,
@@ -140,6 +144,8 @@ class DatabaseService {
         }
         const statusField = source === 'subscriptions' ? 'subscription_status' : 'subscription_status';
         const planField = source === 'subscriptions' ? 'subscription_type' : 'subscription_plan';
+        const periodUnitField = 'subscription_period_unit';
+        const periodValueField = 'subscription_period_value';
         const productField = source === 'subscriptions' ? 'subscription_product_id' : 'subscription_product_id';
         const startedField = source === 'subscriptions' ? 'subscription_started_at' : 'subscription_last_verified_at';
         const expiresField = source === 'subscriptions' ? 'subscription_expires_at' : 'subscription_expires_at';
@@ -163,6 +169,8 @@ class DatabaseService {
             subscriptionActive: isPremium,
             status: normalizedStatus,
             plan,
+            periodUnit: typeof row[periodUnitField] === 'string' ? row[periodUnitField] : null,
+            periodValue: typeof row[periodValueField] === 'number' ? row[periodValueField] : null,
             productId: typeof row[productField] === 'string' ? row[productField] : null,
             startedAt,
             expiresAt,
@@ -181,6 +189,8 @@ class DatabaseService {
             'subscription_active',
             'subscription_status',
             'subscription_type',
+            'subscription_period_unit',
+            'subscription_period_value',
             'subscription_started_at',
             'subscription_expires_at',
             'subscription_product_id',
@@ -442,6 +452,8 @@ class DatabaseService {
         const nowISO = new Date().toISOString();
         const plan = this.normalizePlan(payload.plan);
         const productId = payload.productId?.trim() || null;
+        const periodUnit = payload.periodUnit?.trim().toLowerCase() || null;
+        const periodValue = typeof payload.periodValue === 'number' ? payload.periodValue : null;
         const transactionId = payload.isPremium ? (payload.transactionId?.trim() || null) : null;
         const originalTransactionId = payload.isPremium ? (payload.originalTransactionId?.trim() || null) : null;
         const lastVerifiedAt = this.normalizeTimestamp(payload.lastVerifiedAt) ?? nowISO;
@@ -484,6 +496,8 @@ class DatabaseService {
                 subscription_active: activeNow,
                 subscription_status: status,
                 subscription_type: plan,
+                subscription_period_unit: periodUnit,
+                subscription_period_value: periodValue,
                 subscription_started_at: startedAt,
                 subscription_expires_at: expiresAt,
                 subscription_product_id: productId,

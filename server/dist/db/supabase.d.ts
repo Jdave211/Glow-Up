@@ -15,6 +15,8 @@ export interface DbSubscription {
     subscription_active: boolean;
     subscription_status: string;
     subscription_type?: string | null;
+    subscription_period_unit?: string | null;
+    subscription_period_value?: number | null;
     subscription_started_at?: string | null;
     subscription_expires_at?: string | null;
     subscription_product_id?: string | null;
@@ -139,6 +141,8 @@ export interface UserSubscriptionStatusSnapshot {
     subscriptionActive: boolean;
     status: string;
     plan: string | null;
+    periodUnit?: string | null;
+    periodValue?: number | null;
     productId: string | null;
     startedAt: string | null;
     expiresAt: string | null;
@@ -152,6 +156,8 @@ export interface UserSubscriptionStatusSnapshot {
 export interface SubscriptionStatusUpdatePayload {
     isPremium: boolean;
     plan?: string | null;
+    periodUnit?: string | null;
+    periodValue?: number | null;
     productId?: string | null;
     startedAt?: string | null;
     expiresAt?: string | null;

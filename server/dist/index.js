@@ -770,13 +770,15 @@ app.post('/api/users/:userId/subscription', async (req, res) => {
         if (!userId) {
             return res.status(400).json({ error: 'User ID is required' });
         }
-        const { isPremium, plan, productId, startedAt, expiresAt, lastVerifiedAt, transactionId, originalTransactionId, environment, } = req.body ?? {};
+        const { isPremium, plan, periodUnit, periodValue, productId, startedAt, expiresAt, lastVerifiedAt, transactionId, originalTransactionId, environment, } = req.body ?? {};
         if (typeof isPremium !== 'boolean') {
             return res.status(400).json({ error: 'isPremium (boolean) is required' });
         }
         const updated = await supabase_1.DatabaseService.updateUserSubscriptionStatus(userId, {
             isPremium,
             plan: typeof plan === 'string' ? plan : null,
+            periodUnit: typeof periodUnit === 'string' ? periodUnit : null,
+            periodValue: typeof periodValue === 'number' ? periodValue : null,
             productId: typeof productId === 'string' ? productId : null,
             startedAt: typeof startedAt === 'string' ? startedAt : null,
             expiresAt: typeof expiresAt === 'string' ? expiresAt : null,

@@ -877,6 +877,8 @@ app.post('/api/users/:userId/subscription', async (req, res) => {
     const {
       isPremium,
       plan,
+      periodUnit,
+      periodValue,
       productId,
       startedAt,
       expiresAt,
@@ -893,6 +895,8 @@ app.post('/api/users/:userId/subscription', async (req, res) => {
     const updated = await DatabaseService.updateUserSubscriptionStatus(userId, {
       isPremium,
       plan: typeof plan === 'string' ? plan : null,
+      periodUnit: typeof periodUnit === 'string' ? periodUnit : null,
+      periodValue: typeof periodValue === 'number' ? periodValue : null,
       productId: typeof productId === 'string' ? productId : null,
       startedAt: typeof startedAt === 'string' ? startedAt : null,
       expiresAt: typeof expiresAt === 'string' ? expiresAt : null,

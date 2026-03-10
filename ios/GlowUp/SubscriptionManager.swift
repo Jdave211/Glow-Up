@@ -211,13 +211,16 @@ final class SubscriptionManager: ObservableObject {
                 continue
             }
 
+            let matchedProduct = [weeklyProduct, monthlyProduct].compactMap { $0 }.first { $0.id == transaction.productID }
+
             let candidate = ActiveSubscriptionSnapshot(
                 productId: transaction.productID,
                 expiresAt: transaction.expirationDate,
                 purchaseDate: transaction.purchaseDate,
                 transactionId: String(transaction.id),
                 originalTransactionId: String(transaction.originalID),
-                plan: inferPlan(forProductId: transaction.productID)
+                plan: inferPlan(forProductId: transaction.productID),
+                subscriptionPeriod: matchedProduct?.subscriptionPeriod
             )
             if shouldPrefer(candidate, over: activeSnapshot) {
                 activeSnapshot = candidate
@@ -327,9 +330,21 @@ final class SubscriptionManager: ObservableObject {
         subscriptionSyncInFlightSignature = signature
 
         let formatter = ISO8601DateFormatter()
+        let periodUnit: String? = {
+            switch snapshot?.subscriptionPeriod?.unit {
+            case .day: return "day"
+            case .week: return "week"
+            case .month: return "month"
+            case .year: return "year"
+            default: return nil
+            }
+        }()
+
         let payload = SupabaseService.SubscriptionSyncPayload(
             isPremium: isPremium,
             plan: snapshot?.plan?.rawValue,
+            periodUnit: periodUnit,
+            periodValue: snapshot?.subscriptionPeriod?.value,
             productId: snapshot?.productId,
             startedAt: snapshot.map { formatter.string(from: $0.purchaseDate) },
             expiresAt: snapshot?.expiresAt.map { formatter.string(from: $0) },
@@ -370,6 +385,7 @@ private struct ActiveSubscriptionSnapshot {
     let transactionId: String
     let originalTransactionId: String
     let plan: SubscriptionManager.Plan?
+    let subscriptionPeriod: StoreKit.Product.SubscriptionPeriod?
 
     var signature: String {
         let expirationToken = expiresAt.map { String($0.timeIntervalSince1970) } ?? "none"

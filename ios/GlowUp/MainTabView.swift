@@ -1835,23 +1835,53 @@ struct SettingsView: View {
 
     private func openManageSubscriptions() {
         Task {
+            #if targetEnvironment(simulator)
+            openManageSubscriptionsFallback()
+            #else
             if let scene = UIApplication.shared.connectedScenes.first(where: { $0.activationState == .foregroundActive }) as? UIWindowScene {
+                let didOpen = await openManageSubscriptionsWithTimeout(in: scene)
+                if didOpen {
+                    return
+                }
+            }
+
+            openManageSubscriptionsFallback()
+            #endif
+        }
+    }
+
+    @MainActor
+    private func openManageSubscriptionsFallback() {
+        if let fallbackURL = URL(string: "https://apps.apple.com/account/subscriptions") {
+            openURL(fallbackURL)
+        } else {
+            notificationAlertMessage = "Couldn't open your App Store subscription settings."
+            showNotificationAlert = true
+        }
+    }
+
+    private func openManageSubscriptionsWithTimeout(in scene: UIWindowScene) async -> Bool {
+        await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
                 do {
                     try await AppStore.showManageSubscriptions(in: scene)
-                    return
+                    return true
                 } catch {
                     #if DEBUG
                     print("⚠️ AppStore.manageSubscriptions failed:", error.localizedDescription)
                     #endif
+                    return false
                 }
             }
 
-            if let fallbackURL = URL(string: "https://apps.apple.com/account/subscriptions") {
-                openURL(fallbackURL)
-            } else {
-                notificationAlertMessage = "Couldn't open your App Store subscription settings."
-                showNotificationAlert = true
+            group.addTask {
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                return false
             }
+
+            let firstResult = await group.next() ?? false
+            group.cancelAll()
+            return firstResult
         }
     }
     

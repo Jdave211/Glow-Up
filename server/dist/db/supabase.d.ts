@@ -5,14 +5,8 @@ export interface DbUser {
     email: string;
     name: string;
     onboarded: boolean;
-    subscription_status?: string | null;
-    subscription_plan?: string | null;
-    subscription_product_id?: string | null;
-    subscription_expires_at?: string | null;
-    subscription_last_verified_at?: string | null;
-    subscription_transaction_id?: string | null;
-    subscription_original_transaction_id?: string | null;
-    subscription_environment?: string | null;
+    subscription_active?: boolean | null;
+    subscription_id?: string | null;
     created_at: string;
 }
 export interface DbSubscription {

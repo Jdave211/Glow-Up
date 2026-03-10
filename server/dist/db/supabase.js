@@ -120,6 +120,24 @@ class DatabaseService {
         };
     }
     static normalizeSubscriptionStatusRow(row, source) {
+        if (source === 'users') {
+            const active = row.subscription_active === true;
+            return {
+                isPremium: active,
+                subscriptionActive: active,
+                status: active ? 'active' : 'inactive',
+                plan: null,
+                productId: null,
+                startedAt: null,
+                expiresAt: null,
+                secondsRemaining: 0,
+                daysRemaining: 0,
+                lastVerifiedAt: null,
+                transactionId: null,
+                originalTransactionId: null,
+                environment: null,
+            };
+        }
         const statusField = source === 'subscriptions' ? 'subscription_status' : 'subscription_status';
         const planField = source === 'subscriptions' ? 'subscription_type' : 'subscription_plan';
         const productField = source === 'subscriptions' ? 'subscription_product_id' : 'subscription_product_id';
@@ -188,14 +206,7 @@ class DatabaseService {
         const { data, error } = await exports.supabase
             .from('users')
             .select([
-            'subscription_status',
-            'subscription_plan',
-            'subscription_product_id',
-            'subscription_expires_at',
-            'subscription_last_verified_at',
-            'subscription_transaction_id',
-            'subscription_original_transaction_id',
-            'subscription_environment',
+            'subscription_active',
         ].join(', '))
             .eq('id', userId)
             .maybeSingle();
@@ -464,8 +475,9 @@ class DatabaseService {
         const activeNow = payload.isPremium && (!expiresDate || expiresDate > new Date());
         const status = activeNow ? 'active' : 'inactive';
         let wroteSubscriptionsTable = false;
+        let subscriptionId = null;
         if (subscriptionTableAvailable) {
-            const { error: subscriptionsError } = await exports.supabase
+            const { data: subscriptionsData, error: subscriptionsError } = await exports.supabase
                 .from('subscriptions')
                 .upsert({
                 user_id: userId,
@@ -480,7 +492,9 @@ class DatabaseService {
                 subscription_original_transaction_id: originalTransactionId,
                 subscription_environment: environment,
                 updated_at: nowISO,
-            }, { onConflict: 'user_id' });
+            }, { onConflict: 'user_id' })
+                .select('id')
+                .maybeSingle();
             if (subscriptionsError) {
                 if (this.isIgnorableMissingTableError(subscriptionsError)) {
                     subscriptionTableAvailable = false;
@@ -492,19 +506,14 @@ class DatabaseService {
             }
             else {
                 wroteSubscriptionsTable = true;
+                subscriptionId = subscriptionsData?.id ?? null;
             }
         }
         const { error: usersError } = await exports.supabase
             .from('users')
             .update({
-            subscription_status: status,
-            subscription_plan: plan,
-            subscription_product_id: productId,
-            subscription_expires_at: expiresAt,
-            subscription_last_verified_at: lastVerifiedAt,
-            subscription_transaction_id: transactionId,
-            subscription_original_transaction_id: originalTransactionId,
-            subscription_environment: environment,
+            subscription_active: activeNow,
+            subscription_id: subscriptionId,
         })
             .eq('id', userId);
         const wroteUsersSnapshot = !usersError;
@@ -514,10 +523,10 @@ class DatabaseService {
                 return wroteSubscriptionsTable;
             }
             if (!wroteSubscriptionsTable) {
-                console.warn('Subscription tables/columns missing; apply migrations 019 and 020.');
+                console.warn('Subscription tables/columns missing; apply migrations 020 and 021.');
                 return false;
             }
-            console.warn('User snapshot columns missing; canonical subscriptions table write succeeded.');
+            console.warn('User subscription columns missing; canonical subscriptions table write succeeded.');
             return true;
         }
         return wroteSubscriptionsTable || wroteUsersSnapshot;

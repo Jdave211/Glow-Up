@@ -704,17 +704,27 @@ struct AIDataConsentCard: View {
     let kind: AIConsentKind
     let onAccept: () -> Void
     let onCancel: (() -> Void)?
+    private var isFaceAnalysis: Bool { kind == .faceAnalysis }
 
     var body: some View {
         VStack(spacing: 20) {
             ZStack {
                 Circle()
-                    .fill(Color.white.opacity(0.5))
+                    .fill(
+                        LinearGradient(
+                            colors: isFaceAnalysis
+                                ? [Color.white.opacity(0.68), Color(hex: "FFEAF4").opacity(0.46)]
+                                : [Color.white.opacity(0.58), Color.white.opacity(0.42)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
                     .frame(width: 74, height: 74)
                     .overlay(
                         Circle()
-                            .stroke(Color.white.opacity(0.75), lineWidth: 1)
+                            .stroke(Color.white.opacity(isFaceAnalysis ? 0.92 : 0.75), lineWidth: 1)
                     )
+                    .shadow(color: Color.white.opacity(0.55), radius: 14, x: 0, y: -2)
 
                 Image(systemName: kind.iconName)
                     .font(.system(size: 30, weight: .semibold))
@@ -751,12 +761,27 @@ struct AIDataConsentCard: View {
                     }
                 }
                 .padding(16)
-                .background(Color.white.opacity(0.42))
-                .background(.ultraThinMaterial)
+                .background(
+                    LinearGradient(
+                        colors: isFaceAnalysis
+                            ? [Color.white.opacity(0.48), Color(hex: "FFE8F2").opacity(0.3)]
+                            : [Color.white.opacity(0.42), Color.white.opacity(0.3)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .background(.thinMaterial)
                 .cornerRadius(16)
                 .overlay(
                     RoundedRectangle(cornerRadius: 16)
-                        .stroke(Color.white.opacity(0.65), lineWidth: 1)
+                        .stroke(
+                            LinearGradient(
+                                colors: [Color.white.opacity(0.9), Color.white.opacity(0.35)],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            ),
+                            lineWidth: 1
+                        )
                 )
             }
 
@@ -799,10 +824,12 @@ struct AIDataConsentCard: View {
         .padding(22)
         .background(
             RoundedRectangle(cornerRadius: 30, style: .continuous)
-                .fill(.ultraThinMaterial)
+                .fill(.thinMaterial)
                 .overlay(
                     LinearGradient(
-                        colors: [Color.white.opacity(0.22), Color(hex: "FFDCEB").opacity(0.18)],
+                        colors: isFaceAnalysis
+                            ? [Color.white.opacity(0.34), Color(hex: "FFD3E7").opacity(0.24)]
+                            : [Color.white.opacity(0.22), Color(hex: "FFDCEB").opacity(0.18)],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     )
@@ -810,10 +837,21 @@ struct AIDataConsentCard: View {
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 30, style: .continuous)
-                        .stroke(Color.white.opacity(0.72), lineWidth: 1)
+                        .fill(
+                            LinearGradient(
+                                colors: [Color.white.opacity(0.22), Color.clear],
+                                startPoint: .top,
+                                endPoint: .center
+                            )
+                        )
+                        .blendMode(.screen)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 30, style: .continuous)
+                        .stroke(Color.white.opacity(isFaceAnalysis ? 0.88 : 0.72), lineWidth: 1)
                 )
         )
-        .shadow(color: Color(hex: "8C5A7A").opacity(0.18), radius: 24, x: 0, y: 12)
+        .shadow(color: Color(hex: "8C5A7A").opacity(isFaceAnalysis ? 0.22 : 0.18), radius: 24, x: 0, y: 12)
     }
 }
 
@@ -831,7 +869,7 @@ struct AIDataConsentScreen: View {
     var body: some View {
         ZStack {
             LinearGradient(
-                colors: [Color(hex: "F8DCEC"), Color(hex: "F8ECF9"), Color(hex: "FFF6FA")],
+                colors: [Color(hex: "F7D9EA"), Color(hex: "F8EBF8"), Color(hex: "FFF7FB")],
                 startPoint: .topLeading,
                 endPoint: .bottom
             )
@@ -840,13 +878,13 @@ struct AIDataConsentScreen: View {
             Circle()
                 .fill(Color.white.opacity(0.32))
                 .frame(width: 260, height: 260)
-                .blur(radius: 14)
+                .blur(radius: 18)
                 .offset(x: -110, y: -240)
 
             Circle()
                 .fill(Color(hex: "FFC7DF").opacity(0.36))
                 .frame(width: 220, height: 220)
-                .blur(radius: 18)
+                .blur(radius: 22)
                 .offset(x: 130, y: 290)
 
             ScrollView(showsIndicators: false) {

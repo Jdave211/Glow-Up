@@ -204,15 +204,20 @@ struct ChatView: View {
     @State private var forceScrollToBottomTick = 0
     @State private var pendingMessageAfterConsent: String?
     @State private var showAIConsentSheet = false
+    @State private var placeholderPromptIndex = 0
     @FocusState private var isInputFocused: Bool
     
     private var userId: String? { SessionManager.shared.userId }
     var isEmpty: Bool { chatSession.currentChat.isEmpty }
-    private let starterPrompts = [
-        "What should I improve first based on my current routine?",
-        "Build me a simple morning routine I can actually stick to.",
-        "Explain what my glow score is really telling me."
+    private let suggestionPrompts = [
+        "What serum helps with acne?",
+        "Does facial oil make breakouts worse?",
+        "Recommend an oil-free face cream."
     ]
+    private let placeholderTicker = Timer.publish(every: 3.2, on: .main, in: .common).autoconnect()
+    private var activeInputPlaceholder: String {
+        suggestionPrompts[placeholderPromptIndex]
+    }
     private var contentMaxWidth: CGFloat {
         horizontalSizeClass == .regular ? 820 : .infinity
     }
@@ -240,6 +245,12 @@ struct ChatView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
         .onAppear { loadConversations() }
+        .onReceive(placeholderTicker) { _ in
+            guard messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+            withAnimation(.easeInOut(duration: 0.2)) {
+                placeholderPromptIndex = (placeholderPromptIndex + 1) % suggestionPrompts.count
+            }
+        }
         .sheet(isPresented: $showHistory) {
             ChatHistorySheet(
                 conversations: chatSession.conversations,
@@ -330,9 +341,9 @@ struct ChatView: View {
     // ────────────────────────────────────────
     private var emptyState: some View {
         VStack(spacing: 0) {
-            Spacer(minLength: 28)
+            Spacer(minLength: 40)
 
-            VStack(spacing: 20) {
+            VStack(spacing: 14) {
                 ZStack {
                     Circle()
                         .fill(
@@ -348,61 +359,24 @@ struct ChatView: View {
                         .foregroundColor(Color(hex: "FF5C95"))
                 }
 
-                VStack(spacing: 10) {
-                    Text("Ask one sharp question")
-                        .font(.custom("Didot", size: 34))
+                VStack(spacing: 8) {
+                    Text("Ask anything skincare")
+                        .font(.custom("Didot", size: 32))
                         .fontWeight(.bold)
                         .foregroundColor(Color(hex: "2D2D2D"))
-
-                    Text("GlowUp is strongest when you ask about what to improve first, how to simplify your routine, or why your score looks the way it does.")
-                        .font(.system(size: 14.5, weight: .medium))
-                        .foregroundColor(Color(hex: "8D8590"))
-                        .multilineTextAlignment(.center)
-                        .lineSpacing(3)
                 }
-
-                VStack(spacing: 12) {
-                    ForEach(starterPrompts, id: \.self) { prompt in
-                        starterPromptButton(prompt)
-                    }
-                }
+                
+                Text("Use the input below for quick product and routine questions.")
+                    .font(.system(size: 13.5, weight: .medium))
+                    .foregroundColor(Color(hex: "8D8590"))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 8)
             }
 
             Spacer()
         }
         .padding(.horizontal, horizontalSizeClass == .regular ? 90 : 24)
         .padding(.bottom, 18)
-    }
-
-    private func starterPromptButton(_ prompt: String) -> some View {
-        Button(action: { send(messageOverride: prompt) }) {
-            HStack(spacing: 12) {
-                ZStack {
-                    Circle()
-                        .fill(Color(hex: "FFE8F1"))
-                        .frame(width: 34, height: 34)
-                    Image(systemName: "arrow.up.right")
-                        .font(.system(size: 13, weight: .bold))
-                        .foregroundColor(Color(hex: "FF5C95"))
-                }
-
-                Text(prompt)
-                    .font(.system(size: 14.5, weight: .semibold))
-                    .foregroundColor(Color(hex: "2D2D2D"))
-                    .multilineTextAlignment(.leading)
-
-                Spacer(minLength: 8)
-            }
-            .padding(14)
-            .background(Color.white.opacity(0.92))
-            .overlay(
-                RoundedRectangle(cornerRadius: 18)
-                    .stroke(Color(hex: "F0E2E8"), lineWidth: 1)
-            )
-            .cornerRadius(18)
-            .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 4)
-        }
-        .buttonStyle(.plain)
     }
     
     // ────────────────────────────────────────
@@ -488,7 +462,7 @@ struct ChatView: View {
         VStack(spacing: 0) {
             Divider().opacity(0.3)
             HStack(spacing: 10) {
-                TextField("Ask anything...", text: $messageText, axis: .vertical)
+                TextField(activeInputPlaceholder, text: $messageText, axis: .vertical)
                     .font(.system(size: 15))
                     .foregroundColor(Color(hex: "2D2D2D"))
                     .lineLimit(1...5)

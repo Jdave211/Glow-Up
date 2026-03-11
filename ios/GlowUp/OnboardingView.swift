@@ -60,7 +60,7 @@ struct OnboardingView: View {
                 
                 // Text Section (approx 2/3 down)
                 VStack(alignment: .leading, spacing: 16) {
-                    Text("Glow Up\nFrom Your Photos.")
+                    Text("Discover\nYour Best Self.")
                         .font(.custom("Didot", size: 48)) // Greek/Pink Vibe
                         .fontWeight(.bold)
                         .foregroundColor(.white)

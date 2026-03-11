@@ -332,87 +332,79 @@ struct SkinView: View {
         if let selectedTimelinePhoto {
             ZStack {
                 Rectangle()
-                    .fill(.ultraThinMaterial)
+                    .fill(Color.black.opacity(0.24))
                     .ignoresSafeArea()
+                    .onTapGesture {
+                        dismissSelectedTimelinePhoto()
+                    }
 
                 GeometryReader { proxy in
                     let modalWidth = min(max(proxy.size.width - 40, 280), 620)
                     let imageHeight = min(420, max(250, proxy.size.height * 0.5))
 
-                    ZStack {
-                        Color.clear
-                            .contentShape(Rectangle())
-                            .onTapGesture {
+                    VStack(spacing: 12) {
+                        HStack {
+                            Button {
+                                showDeleteConfirmation = true
+                            } label: {
+                                Image(systemName: "trash")
+                                    .font(.system(size: 13, weight: .bold))
+                                    .foregroundColor(Color(hex: "D64545"))
+                                    .frame(width: 44, height: 44)
+                                    .background(Color.white.opacity(0.95))
+                                    .clipShape(Circle())
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(isDeletingPhoto)
+
+                            Spacer()
+                            Button {
                                 dismissSelectedTimelinePhoto()
+                            } label: {
+                                Image(systemName: "xmark")
+                                    .font(.system(size: 13, weight: .bold))
+                                    .foregroundColor(Color(hex: "666666"))
+                                    .frame(width: 44, height: 44)
+                                    .background(Color.white.opacity(0.95))
+                                    .clipShape(Circle())
                             }
-
-                        VStack(spacing: 12) {
-                            HStack {
-                                Button {
-                                    showDeleteConfirmation = true
-                                } label: {
-                                    Image(systemName: "trash")
-                                        .font(.system(size: 13, weight: .bold))
-                                        .foregroundColor(Color(hex: "D64545"))
-                                        .padding(10)
-                                        .background(Color.white.opacity(0.9))
-                                        .clipShape(Circle())
-                                }
-                                .buttonStyle(.plain)
-                                .disabled(isDeletingPhoto)
-
-                                Spacer()
-                                Button {
-                                    dismissSelectedTimelinePhoto()
-                                } label: {
-                                    Image(systemName: "xmark")
-                                        .font(.system(size: 13, weight: .bold))
-                                        .foregroundColor(Color(hex: "666666"))
-                                        .padding(10)
-                                        .background(Color.white.opacity(0.9))
-                                        .clipShape(Circle())
-                                }
-                                .buttonStyle(.plain)
-                            }
-
-                            TimelineRemoteImage(urlString: selectedTimelinePhoto.imageURL)
-                                .frame(maxWidth: .infinity)
-                                .frame(height: imageHeight)
-                                .clipShape(RoundedRectangle(cornerRadius: 18))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 18)
-                                        .stroke(Color.white.opacity(0.8), lineWidth: 1)
-                                )
-
-                            HStack(spacing: 8) {
-                                Text(selectedTimelinePhoto.label)
-                                    .font(.system(size: 13, weight: .semibold))
-                                    .foregroundColor(Color(hex: "454545"))
-                                Text("•")
-                                    .font(.system(size: 12, weight: .medium))
-                                    .foregroundColor(Color(hex: "9A9A9A"))
-                                Text(selectedTimelinePhoto.date)
-                                    .font(.system(size: 12, weight: .medium))
-                                    .foregroundColor(Color(hex: "8A8A92"))
-                                Spacer()
-                                Text("Score \(selectedTimelinePhoto.score)")
-                                    .font(.system(size: 12, weight: .bold))
-                                    .foregroundColor(Color(hex: "FF5C95"))
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 6)
-                                    .background(Color(hex: "FFF0F5"))
-                                    .cornerRadius(10)
-                            }
+                            .buttonStyle(.plain)
                         }
-                        .padding(16)
-                        .frame(width: modalWidth)
-                        .background(Color(hex: "FCFBFD").opacity(0.95))
-                        .cornerRadius(20)
-                        .shadow(color: Color.black.opacity(0.16), radius: 26, x: 0, y: 12)
-                        .onTapGesture {
-                            // Keep taps inside the modal from falling through to the backdrop dismiss target.
+
+                        TimelineRemoteImage(urlString: selectedTimelinePhoto.imageURL)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: imageHeight)
+                            .clipShape(RoundedRectangle(cornerRadius: 18))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 18)
+                                    .stroke(Color.white.opacity(0.8), lineWidth: 1)
+                            )
+
+                        HStack(spacing: 8) {
+                            Text(selectedTimelinePhoto.label)
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundColor(Color(hex: "454545"))
+                            Text("•")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundColor(Color(hex: "9A9A9A"))
+                            Text(selectedTimelinePhoto.date)
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundColor(Color(hex: "8A8A92"))
+                            Spacer()
+                            Text("Score \(selectedTimelinePhoto.score)")
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundColor(Color(hex: "FF5C95"))
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(Color(hex: "FFF0F5"))
+                                .cornerRadius(10)
                         }
                     }
+                    .padding(16)
+                    .frame(width: modalWidth)
+                    .background(Color(hex: "FCFBFD").opacity(0.96))
+                    .cornerRadius(20)
+                    .shadow(color: Color.black.opacity(0.16), radius: 26, x: 0, y: 12)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
